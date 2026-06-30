@@ -14,6 +14,12 @@ machine**, and watch live brew telemetry.
 It is a small, dependency-light Python package (`bleak` + `pyyaml`) with a clean
 CLI and a fully documented protocol so others can build on it.
 
+> 🤖 **Designed with agentic use in mind.** This was written *by* an AI coding agent
+> ([Claude Code](https://claude.com/claude-code)) and tailored to be driven *by* one —
+> scriptable commands, predictable/parseable output, a fully documented protocol, and a
+> safety model where the tool only ever **loads** a recipe and a **human approves the brew
+> on the machine**. (It's just as pleasant to use by hand.)
+
 ---
 
 ## ⚠️ Safety — this tool only *loads*, it never auto-starts
