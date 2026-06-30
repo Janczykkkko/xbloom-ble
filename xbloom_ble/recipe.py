@@ -145,14 +145,17 @@ class Recipe:
         errors: list[str] = []
 
         # dose / grind
-        # dose: the xBloom app caps the dose at 18 g (observed app maximum).
+        # dose: the xBloom app caps the dose at 18 g (firm app maximum).
         if not (1 <= int(self.dose_g) <= 18):
             errors.append(f"dose_g {self.dose_g} out of range (1–18 g; 18 g is the app maximum)")
-        # grind: 0–100 maps directly to the u8 grinder setting.
-        if not (0 <= int(self.grind) <= 100):
-            errors.append(f"grind {self.grind} out of range (0–100)")
+        # grind: 1–80 — the grinder has 80 micro-steps (~18.75 µm each); a lower
+        # number is finer. (xBloom Studio published spec.)
+        if not (1 <= int(self.grind) <= 80):
+            errors.append(f"grind {self.grind} out of range (1–80; the grinder has 80 micro-steps)")
 
-        # stage temps (heater set-points; observed brews run 80–96 °C).
+        # stage temps (machine preheat/stage set-points; default 110/90). These
+        # are NOT the pour temperature and legitimately exceed the 95 °C pour cap,
+        # so they keep the wider 40–130 °C allowance.
         for label, t in zip(("stage temp1", "stage temp2"), self.stage_temps):
             if not (40 <= float(t) <= 130):
                 errors.append(f"{label} {t}°C out of range (40–130°C)")
@@ -173,15 +176,25 @@ class Recipe:
             # not an error. ml just needs to be ≥1 and fit a sane upper bound.
             if not (1 <= int(p.ml) <= 4000):
                 errors.append(f"pour #{i}: ml {p.ml} out of range (1–4000)")
-            # temp: observed brews run 80–96 °C; allow the full sane 60–100 °C.
-            if not (60 <= int(p.temp_c) <= 100):
-                errors.append(f"pour #{i}: temp_c {p.temp_c} out of range (60–100°C)")
-            # rpm: agitation speed. Observed values are 90/100/120; allow 0–150.
-            if not (0 <= int(p.rpm) <= 150):
-                errors.append(f"pour #{i}: rpm {p.rpm} out of range (0–150)")
-            # flow: observed ~3.0 ml/s; allow a sane 1–10 ml/s.
-            if not (1.0 <= float(p.flow_ml_s) <= 10.0):
-                errors.append(f"pour #{i}: flow_ml_s {p.flow_ml_s} out of range (1–10)")
+            # temp: settable 40–95 °C in 1 °C steps (xBloom Studio published spec).
+            # The app also offers two special non-numeric settings, RT (room temp)
+            # and BP (boiling point); those are not expressible as a numeric value
+            # here, so the numeric validator range is 40–95.
+            if not (40 <= int(p.temp_c) <= 95):
+                errors.append(f"pour #{i}: temp_c {p.temp_c} out of range (40–95°C)")
+            # rpm: agitation speed, 60–120 in 10-RPM steps — EXCEPT a `center` pour
+            # has no agitation, where rpm must be 0. (xBloom Studio published spec.)
+            if p.pattern == "center":
+                if int(p.rpm) != 0 and not (60 <= int(p.rpm) <= 120):
+                    errors.append(
+                        f"pour #{i}: rpm {p.rpm} out of range (0 for a center pour, else 60–120)"
+                    )
+            else:
+                if not (60 <= int(p.rpm) <= 120):
+                    errors.append(f"pour #{i}: rpm {p.rpm} out of range (60–120)")
+            # flow: 3.0–3.5 ml/s in 0.1 steps (xBloom Studio published spec).
+            if not (3.0 <= float(p.flow_ml_s) <= 3.5):
+                errors.append(f"pour #{i}: flow_ml_s {p.flow_ml_s} out of range (3.0–3.5)")
             # pause: the wire byte is (256 − seconds), so it can hold 0–255, but
             # the on-machine countdown caps near 99 s — that is the practical
             # range. We accept the full byte range here.

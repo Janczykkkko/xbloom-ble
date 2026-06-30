@@ -39,7 +39,7 @@ valid ranges"). A minimal recipe:
 ```yaml
 name: My Brew
 dose_g: 16          # 1–18 g (18 g is the app maximum)
-grind: 62           # 0–100
+grind: 62           # 1–80 (lower = finer)
 pours:
   - {ml: 45,  temp_c: 93, pattern: spiral, agitation: true, pause_s: 40, rpm: 100, flow_ml_s: 3.0}
   - {ml: 100, temp_c: 91, pattern: spiral, pause_s: 10, rpm: 100, flow_ml_s: 3.2}

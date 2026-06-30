@@ -135,7 +135,7 @@ Recipes are plain YAML:
 ```yaml
 name: Example Washed
 dose_g: 16          # coffee dose in grams
-grind: 62           # grinder setting (0–100)
+grind: 62           # grinder setting (1–80)
 ratio: 15           # optional; if given, Σ pour ml must equal dose_g * ratio
 stage_temps: [110.0, 90.0]   # optional; machine stage temps, default 110/90
 pours:
@@ -144,20 +144,24 @@ pours:
   - {ml: 95,  temp_c: 90, pattern: spiral, pause_s: 5,  rpm: 100, flow_ml_s: 3.2}
 ```
 
-Per-pour fields:
+Per-pour fields (ranges are **firm — per xBloom Studio specs**):
 
 | Field       | Meaning                                                        |
 |-------------|----------------------------------------------------------------|
-| `ml`        | Water volume for this pour (1–4000 ml). A pour over 127 ml is auto-split by the protocol — not an error. |
-| `temp_c`    | Water temperature (60–100 °C).                                  |
+| `ml`        | Water volume for this pour (≥1 ml). A pour over 127 ml is auto-split by the protocol — not an error. |
+| `temp_c`    | Water temperature (40–95 °C, 1 °C steps).                       |
 | `pattern`   | `spiral`, `ring`, or `center`.                                 |
 | `agitation` | `true` only with `spiral` (an agitated bloom). Default `false`. |
 | `pause_s`   | Pause after this pour, seconds (0–255; the on-machine countdown caps near 99 s). |
-| `rpm`       | Agitation rotation speed (0–150; 0 for `center`).             |
-| `flow_ml_s` | Flow rate in ml/s (1–10).                                      |
+| `rpm`       | Agitation rotation speed (60–120, 10-RPM steps; `0` for `center`). |
+| `flow_ml_s` | Flow rate in ml/s (3.0–3.5, 0.1 steps).                         |
+
+The app also exposes two **special, non-numeric temperature settings — `RT`
+(room temp) and `BP` (boiling point)** — which are not expressible as a numeric
+`temp_c`; the numeric range is 40–95 °C.
 
 See **[Recipe limits & valid ranges](#recipe-limits--valid-ranges)** below for the
-full table and which bounds are firm vs merely observed.
+full table and the firm bounds enforced.
 
 Validation rejects: fewer than two pours (you need at least a bloom and a first
 pour), an unknown `pattern`/`agitation` combo, out-of-range values, and — if a
@@ -167,24 +171,25 @@ pour), an unknown `pattern`/`agitation` combo, out-of-range values, and — if a
 
 ## Recipe limits & valid ranges
 
-These are the bounds `xbloom validate` enforces. Some are firm (a hard machine or
-protocol limit); others are "observed, not a confirmed machine limit" — chosen as
-sane guard-rails from the brews that were captured, and they may be looser or
-tighter than what the firmware truly allows. **If your machine accepts values
-outside these, please open an issue with a capture — the ranges should track real
-hardware.**
+These are the bounds `xbloom validate` enforces. Most are **firm (per the xBloom
+Studio published specifications)** — a real machine/app limit; a couple of
+ceilings (`ml`, `pause_s`) remain practical sanity guards. **If your machine
+behaves differently, please open an issue with a capture — the ranges should
+track real hardware.**
 
 | Value         | Accepted range | Firmness |
 |---------------|----------------|----------|
-| `dose_g`      | 1–18 g         | **Firm.** 18 g is the maximum the xBloom app lets you set. |
-| `grind`       | 0–100          | **Firm.** This is the raw `u8` grinder setting (0–100). |
-| `temp_c` (pour) | 60–100 °C    | Observed brews ran 80–96 °C; 60–100 is a sane allowance, not a confirmed hard limit. |
-| `stage_temps` | 40–130 °C each | Sane allowance around the observed default of 110/90 °C; not a confirmed hard limit. |
-| `rpm`         | 0–150          | Observed values are 90/100/120; 0–150 is a sane allowance, not a confirmed limit. `0` for `center` pours. |
-| `flow_ml_s`   | 1–10 ml/s      | Observed ~3.0 ml/s; 1–10 is a sane allowance, not a confirmed limit. |
+| `dose_g`      | 1–18 g         | **Firm (per xBloom Studio specs).** 18 g is the maximum the xBloom app lets you set. |
+| `grind`       | 1–80           | **Firm (per xBloom Studio specs).** The grinder has 80 micro-steps (~18.75 µm each); a *lower* number is *finer*. |
+| `temp_c` (pour) | 40–95 °C     | **Firm (per xBloom Studio specs).** Settable in 1 °C steps. The app also offers special non-numeric `RT` (room temp) and `BP` (boiling point) settings, outside this numeric range. |
+| `stage_temps` | 40–130 °C each | Machine **preheat/stage set-points** (default 110/90 °C) — NOT the pour temperature, so they legitimately exceed the 95 °C pour cap. Wider allowance around the default. |
+| `rpm`         | 0, or 60–120   | **Firm (per xBloom Studio specs).** 60–120 in 10-RPM steps; `0` (no agitation) is allowed only for `center` pours. |
+| `flow_ml_s`   | 3.0–3.5 ml/s   | **Firm (per xBloom Studio specs).** Settable in 0.1 steps. |
 | `pause_s`     | 0–255          | The wire byte is `256 − seconds` (so 0–255 fits), but the **on-machine countdown caps near 99 s** — treat 0–99 as the practical range. |
 | `ml` (pour)   | 1–4000 ml      | Lower bound (≥1) is firm; a pour **over 127 ml is auto-split** by the protocol (not an error). The 4000 ceiling is just a sanity guard. |
 | `pattern`     | `spiral`, `ring`, `center` | **Firm.** These are the decoded pattern codes; `agitation: true` is only valid with `spiral`. |
+
+> **Source:** xBloom Studio published specifications.
 
 The pour count must be **≥2** (at least a bloom and a first pour), and if you give
 an optional `ratio`, Σ(pour ml) must equal `dose_g * ratio`.

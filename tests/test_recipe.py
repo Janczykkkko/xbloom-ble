@@ -69,17 +69,34 @@ def test_ml_out_of_range_raises():
         ]))
 
 
-def test_temp_out_of_range_raises():
+def test_temp_above_range_raises():
+    # pour temp cap is 95 °C; 96 must be rejected.
     with pytest.raises(RecipeError, match="temp"):
         Recipe.from_dict(_with(pours=[
-            {"ml": 35, "temp_c": 120, "pattern": "spiral", "pause_s": 40, "rpm": 100, "flow_ml_s": 3.0},
+            {"ml": 35, "temp_c": 96, "pattern": "spiral", "pause_s": 40, "rpm": 100, "flow_ml_s": 3.0},
             {"ml": 115, "temp_c": 90, "pattern": "spiral", "pause_s": 5, "rpm": 100, "flow_ml_s": 3.0},
         ]))
 
 
-def test_grind_out_of_range_raises():
+def test_temp_below_range_raises():
+    # pour temp floor is 40 °C; 39 must be rejected.
+    with pytest.raises(RecipeError, match="temp"):
+        Recipe.from_dict(_with(pours=[
+            {"ml": 35, "temp_c": 39, "pattern": "spiral", "pause_s": 40, "rpm": 100, "flow_ml_s": 3.0},
+            {"ml": 115, "temp_c": 90, "pattern": "spiral", "pause_s": 5, "rpm": 100, "flow_ml_s": 3.0},
+        ]))
+
+
+def test_grind_above_range_raises():
+    # grind range is 1–80; 81 must be rejected.
     with pytest.raises(RecipeError, match="grind"):
-        Recipe.from_dict(_with(grind=150))
+        Recipe.from_dict(_with(grind=81))
+
+
+def test_grind_zero_raises():
+    # grind range is 1–80; 0 must be rejected.
+    with pytest.raises(RecipeError, match="grind"):
+        Recipe.from_dict(_with(grind=0))
 
 
 def test_dose_out_of_range_raises():
@@ -88,9 +105,9 @@ def test_dose_out_of_range_raises():
 
 
 def test_dose_over_app_max_raises():
-    # 18 g is the observed app maximum; 20 g must be rejected.
+    # 18 g is the firm app maximum; 19 g must be rejected.
     with pytest.raises(RecipeError, match="dose"):
-        Recipe.from_dict(_with(dose_g=20))
+        Recipe.from_dict(_with(dose_g=19))
 
 
 def test_dose_at_app_max_passes():
@@ -100,17 +117,55 @@ def test_dose_at_app_max_passes():
 
 
 def test_rpm_out_of_range_raises():
+    # 50 RPM is below the 60–120 band and not 0, so it must be rejected.
     with pytest.raises(RecipeError, match="rpm"):
         Recipe.from_dict(_with(pours=[
-            {"ml": 35, "temp_c": 90, "pattern": "spiral", "pause_s": 40, "rpm": 200, "flow_ml_s": 3.0},
+            {"ml": 35, "temp_c": 90, "pattern": "spiral", "pause_s": 40, "rpm": 50, "flow_ml_s": 3.0},
             {"ml": 115, "temp_c": 90, "pattern": "spiral", "pause_s": 5, "rpm": 100, "flow_ml_s": 3.0},
         ]))
 
 
-def test_flow_out_of_range_raises():
+def test_rpm_in_band_passes():
+    # 90 RPM is within the 60–120 band and must be accepted.
+    r = Recipe.from_dict(_with(pours=[
+        {"ml": 35, "temp_c": 90, "pattern": "spiral", "pause_s": 40, "rpm": 90, "flow_ml_s": 3.0},
+        {"ml": 115, "temp_c": 90, "pattern": "spiral", "pause_s": 5, "rpm": 90, "flow_ml_s": 3.0},
+    ]))
+    assert r.pours[0].rpm == 90
+
+
+def test_rpm_zero_with_center_pour_passes():
+    # rpm 0 (no agitation) is valid specifically for a center pour.
+    r = Recipe.from_dict(_with(pours=[
+        {"ml": 35, "temp_c": 90, "pattern": "center", "pause_s": 40, "rpm": 0, "flow_ml_s": 3.0},
+        {"ml": 115, "temp_c": 90, "pattern": "spiral", "pause_s": 5, "rpm": 100, "flow_ml_s": 3.0},
+    ]))
+    assert r.pours[0].rpm == 0
+
+
+def test_rpm_zero_with_non_center_pour_raises():
+    # rpm 0 is only allowed for center pours; a spiral pour must be 60–120.
+    with pytest.raises(RecipeError, match="rpm"):
+        Recipe.from_dict(_with(pours=[
+            {"ml": 35, "temp_c": 90, "pattern": "spiral", "pause_s": 40, "rpm": 0, "flow_ml_s": 3.0},
+            {"ml": 115, "temp_c": 90, "pattern": "spiral", "pause_s": 5, "rpm": 100, "flow_ml_s": 3.0},
+        ]))
+
+
+def test_flow_above_range_raises():
+    # flow range is 3.0–3.5; 3.6 must be rejected.
     with pytest.raises(RecipeError, match="flow"):
         Recipe.from_dict(_with(pours=[
-            {"ml": 35, "temp_c": 90, "pattern": "spiral", "pause_s": 40, "rpm": 100, "flow_ml_s": 15.0},
+            {"ml": 35, "temp_c": 90, "pattern": "spiral", "pause_s": 40, "rpm": 100, "flow_ml_s": 3.6},
+            {"ml": 115, "temp_c": 90, "pattern": "spiral", "pause_s": 5, "rpm": 100, "flow_ml_s": 3.0},
+        ]))
+
+
+def test_flow_below_range_raises():
+    # flow range is 3.0–3.5; 2.9 must be rejected.
+    with pytest.raises(RecipeError, match="flow"):
+        Recipe.from_dict(_with(pours=[
+            {"ml": 35, "temp_c": 90, "pattern": "spiral", "pause_s": 40, "rpm": 100, "flow_ml_s": 2.9},
             {"ml": 115, "temp_c": 90, "pattern": "spiral", "pause_s": 5, "rpm": 100, "flow_ml_s": 3.0},
         ]))
 
