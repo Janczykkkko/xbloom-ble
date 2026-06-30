@@ -127,6 +127,9 @@ Common flags: `--address`, `--timeout`, `-v/--verbose`, `--version`.
 
 ## Recipe format
 
+> 📖 **Looking for recipes to start from?** Browse the community **[xBloom recipe ledger](https://xbloom.lodywgumce.tv)**
+> — per-bean pour recipes (grind, temps, pour schedule) you can adapt to the format below.
+
 Recipes are plain YAML:
 
 ```yaml
