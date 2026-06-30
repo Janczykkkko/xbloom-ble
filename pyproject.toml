@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xbloom-ble"
+version = "0.1.0"
+description = "Unofficial Bluetooth LE control for the xBloom Studio coffee machine (loads recipes only — never auto-starts a brew)."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Janczykkkko" }]
+keywords = ["xbloom", "coffee", "bluetooth", "ble", "bleak", "pour-over"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Topic :: Home Automation",
+]
+dependencies = [
+    "bleak>=0.21",
+    "pyyaml>=6",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7", "ruff>=0.1"]
+
+[project.urls]
+Homepage = "https://github.com/Janczykkkko/xbloom-ble"
+Repository = "https://github.com/Janczykkkko/xbloom-ble"
+
+[project.scripts]
+xbloom = "xbloom_ble.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["xbloom_ble*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP", "B"]

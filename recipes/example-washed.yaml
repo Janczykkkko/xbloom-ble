@@ -1,0 +1,17 @@
+# Example recipe: a generic washed coffee (e.g. a Colombia or Ethiopia washed).
+# A clean 1:15 brew with an agitated bloom and two even spiral pours.
+#
+# dose_g 16 * ratio 15 = 240 ml total water, which matches the sum of pours
+# (45 + 100 + 95 = 240), so the optional ratio check passes.
+name: Example Washed
+dose_g: 16
+grind: 62
+ratio: 15
+stage_temps: [110.0, 90.0]
+pours:
+  # Bloom: small pour, spiral with agitation, long pause to degas.
+  - {ml: 45,  temp_c: 93, pattern: spiral, agitation: true, pause_s: 40, rpm: 100, flow_ml_s: 3.0}
+  # First main pour.
+  - {ml: 100, temp_c: 91, pattern: spiral, pause_s: 10, rpm: 100, flow_ml_s: 3.2}
+  # Second main pour.
+  - {ml: 95,  temp_c: 90, pattern: spiral, pause_s: 5,  rpm: 100, flow_ml_s: 3.2}
