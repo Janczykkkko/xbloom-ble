@@ -63,14 +63,9 @@ async def _cmd_scan(args) -> int:
 # validate
 # ---------------------------------------------------------------------------
 def _cmd_validate(args) -> int:
-    try:
-        recipe = Recipe.from_yaml(args.recipe)
-    except RecipeError as exc:
-        print(f"INVALID: {exc}")
-        return 1
-    except FileNotFoundError:
-        print(f"ERROR: recipe file not found: {args.recipe}")
-        return 2
+    recipe, err = _load_recipe_or_exit(args.recipe)
+    if err is not None:
+        return err
     print(f"OK: '{recipe.name}' — {recipe.dose_g} g, grind {recipe.grind}, "
           f"{len(recipe.pours)} pours, {recipe.total_water_ml} ml total water")
     return 0
@@ -84,15 +79,10 @@ async def _cmd_brew(args) -> int:
 
     from .client import XBloomClient, scan
 
-    # 1. Validate.
-    try:
-        recipe = Recipe.from_yaml(args.recipe)
-    except RecipeError as exc:
-        print(f"INVALID recipe: {exc}")
-        return 1
-    except FileNotFoundError:
-        print(f"ERROR: recipe file not found: {args.recipe}")
-        return 2
+    # 1. Load + validate (from a local path or an http(s) URL).
+    recipe, err = _load_recipe_or_exit(args.recipe)
+    if err is not None:
+        return err
     print(f"Recipe '{recipe.name}' is valid ({recipe.total_water_ml} ml total).")
 
     # 2. Resolve address.
@@ -163,14 +153,18 @@ CLOUD_NOTE = (
 )
 
 
-def _load_recipe_or_exit(path: str):
+def _load_recipe_or_exit(src: str):
+    """Load a recipe from a local path or an http(s) URL → (recipe, error_code)."""
     try:
-        return Recipe.from_yaml(path), None
+        return Recipe.from_source(src), None
     except RecipeError as exc:
         print(f"INVALID recipe: {exc}")
         return None, 1
     except FileNotFoundError:
-        print(f"ERROR: recipe file not found: {path}")
+        print(f"ERROR: recipe file not found: {src}")
+        return None, 2
+    except OSError as exc:  # URL fetch failure (URLError/HTTPError/timeout subclass OSError)
+        print(f"ERROR: could not fetch recipe from {src}: {exc}")
         return None, 2
 
 
@@ -266,13 +260,13 @@ def build_parser() -> argparse.ArgumentParser:
     s_scan.add_argument("--timeout", type=float, default=8.0, help="scan seconds (default 8)")
 
     s_val = sub.add_parser("validate", help="validate a recipe YAML file")
-    s_val.add_argument("recipe", help="path to recipe YAML")
+    s_val.add_argument("recipe", help="path to a recipe YAML, or an http(s):// URL")
 
     s_brew = sub.add_parser(
         "brew",
         help="load a recipe and stream telemetry (does NOT start the brew)",
     )
-    s_brew.add_argument("recipe", help="path to recipe YAML")
+    s_brew.add_argument("recipe", help="path to a recipe YAML, or an http(s):// URL")
     s_brew.add_argument("--address", help="machine BLE address (or set XBLOOM_ADDRESS)")
     s_brew.add_argument("--timeout", type=float, default=300.0,
                         help="telemetry stream seconds (default 300)")
@@ -301,13 +295,13 @@ def build_parser() -> argparse.ArgumentParser:
     c_sync = cloud_sub.add_parser(
         "sync", help="create-or-update a tool-owned 'AUTO …' recipe (idempotent, safe)"
     )
-    c_sync.add_argument("recipe", help="path to recipe YAML")
+    c_sync.add_argument("recipe", help="path to a recipe YAML, or an http(s):// URL")
     c_sync.add_argument("--cup", default="omni", help="cup type (default omni)")
 
     c_add = cloud_sub.add_parser(
         "add-recipe", help="⚠️ create a recipe in your account from a recipe YAML"
     )
-    c_add.add_argument("recipe", help="path to recipe YAML")
+    c_add.add_argument("recipe", help="path to a recipe YAML, or an http(s):// URL")
     c_add.add_argument("--cup", default="omni", help="cup type (default omni)")
 
     cloud_sub.add_parser("list", help="list the recipes in your account (marks tool-owned)")
