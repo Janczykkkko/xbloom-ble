@@ -25,7 +25,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7", "ruff>=0.1"]
+# The optional cloud feature (push recipes to your xBloom app account) needs an
+# RSA implementation. BLE control works without it.
+cloud = ["cryptography>=41"]
+dev = ["pytest>=7", "ruff>=0.1", "cryptography>=41"]
 
 [project.urls]
 Homepage = "https://github.com/Janczykkkko/xbloom-ble"

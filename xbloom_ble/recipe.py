@@ -221,6 +221,15 @@ class Recipe:
     def total_water_ml(self) -> int:
         return sum(int(p.ml) for p in self.pours)
 
+    @property
+    def effective_ratio(self) -> float:
+        """Brew ratio (water : coffee). Uses the explicit ``ratio`` if given,
+        else derives it from ``Σ pour ml / dose_g`` (one decimal). Used by the
+        cloud mapping (``grandWater``)."""
+        if self.ratio is not None:
+            return float(self.ratio)
+        return round(self.total_water_ml / float(self.dose_g), 1) if self.dose_g else 0.0
+
     def to_protocol_dict(self) -> dict[str, Any]:
         """Shape consumed by :func:`xbloom_ble.protocol.build_load_frames`."""
         return {

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Cloud recipe sync** (`xbloom cloud`, optional `xbloom-ble[cloud]` extra):
+  push recipes to your xBloom **app account** via the unofficial cloud REST API
+  (`login` / `sync` / `add-recipe` / `list` / `delete` / `fetch`). Ported from
+  `cryptofishbug/xbloom-recipe-cli` (MIT).
+- **Managed-recipe safety model.** Recipes created by the tool are named
+  `AUTO <name>`; `sync` is idempotent (update-or-add by name), and `update`/
+  `delete`/`prune` will **only ever** touch `AUTO …` recipes — recipes you made
+  by hand are never modified or removed (enforced in code + tests).
+
 ### Fixed
 - **`ffe1` writes now use a Write Command (write-without-response).** The machine
   rejects a Write Request (write-with-response) with GATT "Unlikely Error"; the

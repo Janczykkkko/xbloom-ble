@@ -129,6 +129,31 @@ timeout (`--timeout`, default 300 s) elapses. A telemetry log is written to
 
 Common flags: `--address`, `--timeout`, `-v/--verbose`, `--version`.
 
+### Push recipes to your app account (cloud)
+
+Separately from BLE machine control, `xbloom cloud` can push recipes to your
+xBloom **app account** via the *unofficial* xBloom cloud REST API, so a recipe
+you define here shows up in the phone app. Needs the optional dependency:
+`pip install "xbloom-ble[cloud]"`.
+
+```bash
+export XBLOOM_EMAIL=you@example.com XBLOOM_PASSWORD=…   # or `xbloom cloud login`
+xbloom cloud sync my-recipe.yaml     # create-or-update a tool-owned recipe (idempotent)
+xbloom cloud list                    # list account recipes ('*' = tool-owned)
+xbloom cloud delete <tableId>        # only AUTO … recipes can be deleted
+xbloom cloud fetch <share-url>       # read a publicly shared recipe (no auth)
+```
+
+> 🔒 **Safety: the tool only ever manages recipes it created.** Every recipe
+> pushed via `sync` is named **`AUTO <name>`**, and `sync`/`delete` will **only**
+> update or remove `AUTO …` recipes. Recipes you made by hand in the app are
+> never modified or deleted. This is enforced in code (`update_recipe` /
+> `delete_recipe` refuse a non-`AUTO` target) and covered by tests.
+
+This uses a community-reverse-engineered, unofficial API (it may break, and it
+touches your real account) — see [`cloud.py`](xbloom_ble/cloud.py) for the
+mechanics (RSA-encrypted bodies, endpoints, field schema).
+
 ---
 
 ## Recipe format
