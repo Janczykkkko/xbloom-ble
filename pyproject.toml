@@ -70,4 +70,8 @@ allow_zero_version = true
 match = "main"
 
 [tool.semantic_release.changelog]
+# "update" mode preserves the curated CHANGELOG and inserts new versions at the
+# insertion flag — so hand-tidied entries are never regenerated/clobbered.
+mode = "update"
+insertion_flag = "<!-- version list -->"
 exclude_commit_patterns = ['''^chore\(release\):''']
