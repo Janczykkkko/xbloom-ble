@@ -28,6 +28,8 @@ Byte  Name                          Meaning
 0x1e  awaiting_confirm              Waiting for the human to confirm on device.
 0x3b  brewing                       Brew in progress.
 0x41  complete                      Brew complete.
+0x43  saving_slots                  Easy-Mode slot batch being stored.
+0x25  slots_saved                   Easy-Mode slots stored OK (then → idle).
 ====  ============================  =========================================
 
 The state ``0x1f`` (armed) is what :meth:`XBloomClient.load_recipe` waits for
@@ -55,6 +57,8 @@ STATE_NAMES: dict[int, str] = {
     0x1E: "awaiting_confirm",
     0x3B: "brewing",
     0x41: "complete",
+    0x43: "saving_slots",
+    0x25: "slots_saved",
 }
 
 # Notification TYPE bytes (offset 3) that are idle heartbeats — ignored.
