@@ -8,6 +8,20 @@ Conventional-Commit history — new versions are inserted below.
 
 <!-- version list -->
 
+## v0.2.0 (2026-07-01)
+
+### Chores
+
+- Tidy changelog and clean release-note rendering
+  ([#3](https://github.com/Janczykkkko/xbloom-ble/pull/3),
+  [`599c84c`](https://github.com/Janczykkkko/xbloom-ble/commit/599c84c599fbd3f7f3c353eb82c9b0bea40ef856))
+
+### Features
+
+- Load recipes from an http(s) URL ([#4](https://github.com/Janczykkkko/xbloom-ble/pull/4),
+  [`620d814`](https://github.com/Janczykkkko/xbloom-ble/commit/620d814ee0daccf9080da9787e63da3a7189bb6c))
+
+
 ## v0.1.0 (2026-07-01)
 
 First public release — unofficial Bluetooth LE control for the
