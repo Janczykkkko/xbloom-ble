@@ -8,6 +8,15 @@ Conventional-Commit history — new versions are inserted below.
 
 <!-- version list -->
 
+## v1.0.1 (2026-07-01)
+
+### Bug Fixes
+
+- Force Pro mode for slot writes (fixes RETRY in Auto mode)
+  ([#8](https://github.com/Janczykkkko/xbloom-ble/pull/8),
+  [`0f1e50b`](https://github.com/Janczykkkko/xbloom-ble/commit/0f1e50bce0edda8bc18097eb37961135696940fe))
+
+
 ## v1.0.0 (2026-07-01)
 
 ### Documentation
