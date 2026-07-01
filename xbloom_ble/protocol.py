@@ -73,7 +73,9 @@ __all__ = [
     "build_load_frames",
     "build_session_start",
     "build_save_slot",
+    "build_set_mode",
     "CMD_SAVE_SLOT",
+    "CMD_SET_MODE",
     "FORBIDDEN_COMMIT_OPCODE",
     "FORBIDDEN_START_OPCODE",
 ]
@@ -273,4 +275,28 @@ def build_save_slot(recipe: Mapping, slot: int, scale: bool = True) -> bytes:
     body = bytearray(bytes([0x58, 0x01, 0x02]) + struct.pack("<H", CMD_SAVE_SLOT)
                      + b"\x00\x00\x00\x00" + payload)
     body[5:9] = struct.pack("<I", len(body) + 2)             # 4-byte LEN incl. CRC
+    return bytes(body) + struct.pack("<H", crc16_kermit(bytes(body)))
+
+
+# Machine operating mode (verified from an HCI capture of the app's mode toggle).
+# Slot writes are ONLY accepted in PRO mode — in AUTO mode (the on-machine A/B/C recipe
+# selector) the machine sits in status 0x41 and rejects them (RETRY). PRO mode drops it to
+# status 0x01 (idle), where saves land. So :meth:`XBloomClient.save_slots` forces PRO first.
+CMD_SET_MODE = 0x2CF7  # 11511
+MODE_PRO_PAYLOAD = bytes.fromhex("00000000")   # → status 0x01 (idle); slot writes accepted
+MODE_AUTO_PAYLOAD = bytes.fromhex("91327856")  # → status 0x41; the A/B/C preset selector
+
+
+def build_set_mode(pro: bool = True) -> bytes:
+    """Build the frame that switches the machine between PRO and AUTO mode.
+
+    Frame: ``58 01 02 | f7 2c(=0x2CF7) | LEN(u32 LE) | 01 | <4-byte mode> | CRC16``. ``pro=True``
+    selects PRO mode (``00000000`` → status ``0x01`` idle, where slot writes are accepted);
+    ``pro=False`` selects AUTO mode (``91327856`` → the on-machine A/B/C recipe selector). This
+    only changes the display mode — it never brews. Byte-exact vs the vendor app.
+    """
+    payload = bytes([0x01]) + (MODE_PRO_PAYLOAD if pro else MODE_AUTO_PAYLOAD)
+    body = bytearray(bytes([0x58, 0x01, 0x02]) + struct.pack("<H", CMD_SET_MODE)
+                     + b"\x00\x00\x00\x00" + payload)
+    body[5:9] = struct.pack("<I", len(body) + 2)
     return bytes(body) + struct.pack("<H", crc16_kermit(bytes(body)))

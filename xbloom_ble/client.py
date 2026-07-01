@@ -15,7 +15,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 
-from .protocol import build_load_frames, build_save_slot, build_session_start
+from .protocol import build_load_frames, build_save_slot, build_session_start, build_set_mode
 from .recipe import Recipe
 from .telemetry import StatusEvent, parse_notification
 
@@ -193,6 +193,8 @@ class XBloomClient:
         recipes: Sequence[Recipe] | Mapping[object, Recipe],
         *,
         scale: bool | Sequence[bool] = True,
+        ensure_pro: bool = True,
+        end_in_auto: bool = True,
     ) -> None:
         """Program the machine's three Easy-Mode preset slots (A, B, C) in one batch.
 
@@ -228,14 +230,22 @@ class XBloomClient:
 
         await self._start_notify()
         try:
-            # 1. Open a session (a4) and let the machine settle to idle/ready.
+            # 1. Open a session (a4), then force PRO mode. Slot writes are ONLY accepted in
+            #    PRO mode: AUTO mode (the on-machine A/B/C selector) parks the machine in
+            #    status 0x41 and rejects writes (RETRY); PRO mode drops it to 0x01 (idle),
+            #    where saves land. Sending PRO is what makes the idle wait below reliable.
             await self._client.write_gatt_char(
                 CHAR_COMMAND, build_session_start(), response=False
             )
+            if ensure_pro:
+                log.info("→ set PRO mode (slot writes require it)")
+                await self._client.write_gatt_char(
+                    CHAR_COMMAND, build_set_mode(pro=True), response=False
+                )
             try:
                 await self._drain_until_state(STATE_IDLE, self.ack_timeout)
             except XBloomError:
-                log.warning("machine idle not confirmed after session start; proceeding")
+                log.warning("machine idle not confirmed; proceeding (is it in AUTO mode?)")
             await asyncio.sleep(1.0)
 
             # 2. Write all three slot frames back-to-back (NO commit). The machine
@@ -249,6 +259,15 @@ class XBloomClient:
             #    hangs at 0x43 (saving) and never reaches 0x25, the save failed.
             await self._drain_until_state(STATE_SLOTS_SAVED, self.ack_timeout)
             log.info("presets stored to slots A/B/C")
+
+            # 4. Return the machine to AUTO mode so the freshly-written A/B/C presets are
+            #    ready to pick on the dial (that's how they're brewed).
+            if end_in_auto:
+                log.info("→ back to AUTO mode (presets ready on the dial)")
+                await self._client.write_gatt_char(
+                    CHAR_COMMAND, build_set_mode(pro=False), response=False
+                )
+                await asyncio.sleep(0.3)
         finally:
             await self._stop_notify()
 
