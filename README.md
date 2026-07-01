@@ -84,6 +84,38 @@ with BLE permissions.
 
 ---
 
+## Getting started
+
+Do it in this order:
+
+1. **Install** (above) and make sure Bluetooth is on.
+2. **Find the machine** — `xbloom scan` — and note its address (or set
+   `export XBLOOM_ADDRESS=…` so you never type it again).
+3. **Write a recipe** — a small YAML file (see [Recipe format](#recipe-format)),
+   or point at a hosted one by URL. Check it with `xbloom validate <recipe>`.
+4. **Make sure the phone app is disconnected** from the machine before any write —
+   the machine allows a **single** BLE link, and the app holds it. Close the app
+   *and* turn the phone's Bluetooth off.
+5. **Pick one of the two paths below.**
+
+Then, whichever path you choose:
+
+> **There are exactly two ways to get a recipe onto the machine — pick one:**
+>
+> **▸ Path 1 — Load one recipe and brew it now** (`xbloom brew <recipe>`).
+> The tool loads the recipe and the machine prompts you to **approve the brew on
+> the machine**. Best for a one-off brew of whatever you're dialing in.
+>
+> **▸ Path 2 — Program the three dial presets, then brew with no phone**
+> (`xbloom save-slots <A> <B> <C>`). Stores three recipes on the machine's
+> Easy-Mode dial (slots A/B/C) so you can brew straight from the dial, no app, no
+> recipe cards. Best for your everyday go-to coffees.
+
+(Separately, `xbloom cloud` manages the recipe **library in your phone app
+account** — that's not a way to drive the machine directly; see below.)
+
+---
+
 ## Usage
 
 The CLI is `xbloom`.
@@ -144,6 +176,35 @@ xbloom brew https://xbloom.lodywgumce.tv/r/teso-la-leona.yaml
 ```
 
 Common flags: `--address`, `--timeout`, `-v/--verbose`, `--version`.
+
+### Program the dial presets (save-slots)
+
+The xBloom Studio's **Auto Mode** stores three recipes on the machine's dial
+(slots **A / B / C**) so you can brew from the dial with no phone. `save-slots`
+programs all three at once from three recipes — a **preset write, it never
+brews**:
+
+```bash
+xbloom save-slots light.yaml medium.yaml iced.yaml
+xbloom save-slots a.yaml b.yaml c.yaml --scale-off C   # disable the scale in slot C's preset
+```
+
+All three are required in one call — the machine only *stores* the presets once
+it has received the whole A/B/C set (it saves the batch atomically). Writing a
+single slot leaves the machine showing **RETRY**.
+
+> ⚠️ **These presets live on the machine, and the phone app can overwrite them.**
+> The xBloom app keeps its *own* A/B/C assignments and pushes them to the machine
+> over Bluetooth whenever you (re)assign a slot in the app — which will clobber
+> what you set here. There is **no way to read the machine's current slots back**
+> (the app can't either; it only remembers what it last pushed). So: keep your
+> three recipes somewhere (a folder, a repo) and re-run `save-slots` to restore
+> them, and program the slots when you intend to drive the machine **from its
+> dial, not the app**.
+>
+> 🔌 Before writing, **disconnect the phone** (close the app *and* turn its
+> Bluetooth off) — the machine allows one BLE link at a time, and a slot write to
+> a machine that's still bonded to the phone will fail with RETRY.
 
 ### Push recipes to your app account (cloud)
 
@@ -338,6 +399,41 @@ Each pour becomes an **8-byte segment**:
 segments** (`[ml, temp, pat, agit]`) followed by an 8-byte remainder segment
 carrying the flow/pause/rpm fields.
 
+### Programming the dial presets (Auto-Mode slots)
+
+Auto Mode's three dial presets (A/B/C) are written with a **different command,
+`0x2CF6`**, and — unlike the LOAD sequence — as a **batch of all three, with no
+commit frame**. Each slot frame:
+
+```
+58 01 02 | f6 2c (=0x2CF6) | LEN(u32 LE) | 01 | SLOT(0/1/2) | FLAGS | <0x41 blob> | CRC16
+```
+
+- **`SLOT`** — `0`=A, `1`=B, `2`=C.
+- **`FLAGS`** — `0x12` = store with the on-brew **scale enabled**, `0x02` =
+  disabled (bit `0x10` is the scale flag).
+- **`<0x41 blob>`** — the same `pours | grind | tail` body as the LOAD `0x41`
+  frame, minus its leading `0x01`.
+
+The write sequence (reverse-engineered from two app captures + confirmed on
+hardware):
+
+1. `0xa4` session start; wait for the machine to reach idle (`0x57` state `0x01`).
+2. Write the **three** slot frames (A, B, C) back-to-back. The machine acks each
+   with a `58 02 07 f6 2c … c2 d204` notification.
+3. The machine then stores the whole set **atomically** — signalled by a `0xf8`
+   notification and the status progression `0x43` (saving) → `0x25` (saved) →
+   `0x01` (idle). **There is no commit frame.**
+
+Writing a single slot (or adding a trailing "commit") leaves the machine hung at
+`0x43` and it shows **RETRY** — the store only completes with the full A/B/C
+batch. Like every other write here, `0x2CF6` is a preset write and **never starts
+a brew**.
+
+> The machine exposes **no way to read the current slots back** — the vendor app
+> doesn't read them either; it just re-pushes whatever it last stored. Keep your
+> recipes and re-run the batch to restore them.
+
 ### Status notifications (`ffe2`)
 
 Notifications use their **own** frame shape (distinct from the command frames
@@ -367,6 +463,8 @@ above):
 | 0x1e  | awaiting_confirm   | Waiting for the human to confirm.    |
 | 0x3b  | brewing            | Brew in progress.                    |
 | 0x41  | complete           | Brew complete.                       |
+| 0x43  | saving_slots       | Auto-Mode slot batch being stored.   |
+| 0x25  | slots_saved        | Auto-Mode slots stored OK (→ idle).  |
 
 The load path waits for state **`0x1f` (armed)**, which the machine reports right
 after it ACKs the `0x41` pours frame — that's when it prompts the human to approve.

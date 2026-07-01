@@ -1,7 +1,9 @@
-"""Slot-write (save-slot) protocol tests — byte-exact against a captured app frame."""
+"""Slot-write (save-slots) protocol tests — byte-exact against a captured app frame,
+plus the batch-normalisation logic in the client."""
 
 import pytest
 
+from xbloom_ble.client import XBloomClient, XBloomError
 from xbloom_ble.protocol import build_save_slot
 
 # The Savora recipe exactly as the vendor app stored it to a slot (rpm on the
@@ -50,3 +52,44 @@ def test_save_slot_rejects_bad_index():
     for bad in (3, -1, "A"):
         with pytest.raises(ValueError):
             build_save_slot(REC, bad)
+
+
+# --- batch normalisation (save_slots) --------------------------------------
+def _r(name):
+    from xbloom_ble.recipe import Recipe
+
+    return Recipe.from_dict({
+        "name": name, "dose_g": 16, "grind": 60,
+        "pours": [
+            {"ml": 40, "temp_c": 92, "pattern": "spiral", "agitation": True, "rpm": 120, "pause_s": 40},
+            {"ml": 200, "temp_c": 90, "pattern": "spiral", "rpm": 120, "pause_s": 5},
+        ],
+    })
+
+
+def test_normalize_slots_sequence_of_three():
+    rs = [_r("A"), _r("B"), _r("C")]
+    assert XBloomClient._normalize_slots(rs) == rs
+
+
+def test_normalize_slots_requires_exactly_three():
+    with pytest.raises(XBloomError):
+        XBloomClient._normalize_slots([_r("A"), _r("B")])
+
+
+def test_normalize_slots_mapping_by_letter_and_index():
+    a, b, c = _r("A"), _r("B"), _r("C")
+    assert XBloomClient._normalize_slots({"A": a, "B": b, "C": c}) == [a, b, c]
+    assert XBloomClient._normalize_slots({0: a, 1: b, 2: c}) == [a, b, c]
+
+
+def test_normalize_slots_mapping_missing_slot():
+    with pytest.raises(XBloomError):
+        XBloomClient._normalize_slots({"A": _r("A"), "B": _r("B")})
+
+
+def test_normalize_scale_bool_and_sequence():
+    assert XBloomClient._normalize_scale(True) == [True, True, True]
+    assert XBloomClient._normalize_scale([True, False, True]) == [True, False, True]
+    with pytest.raises(XBloomError):
+        XBloomClient._normalize_scale([True, False])

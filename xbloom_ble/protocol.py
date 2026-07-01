@@ -71,8 +71,8 @@ __all__ = [
     "build_a8",
     "build_41",
     "build_load_frames",
+    "build_session_start",
     "build_save_slot",
-    "build_slot_commit",
     "CMD_SAVE_SLOT",
     "FORBIDDEN_COMMIT_OPCODE",
     "FORBIDDEN_START_OPCODE",
@@ -220,8 +220,28 @@ def build_load_frames(recipe: Mapping) -> list[bytes]:
     return frames
 
 
-# Easy-Mode preset slots (A/B/C = 0/1/2). Writing a slot programs a preset onto
-# the machine; it does NOT brew.
+def build_session_start() -> bytes:
+    """The ``0xa4`` session-start frame the app sends once, right after connecting.
+
+    :meth:`XBloomClient.save_slots` sends this before the slot writes so the
+    machine is in a live session and reaches its idle/ready state; the same frame
+    is the first of the LOAD sequence. Carries no brew-start opcode.
+    """
+    return xbloom_frame(0xA4, LOAD_SEQ, build_a4())
+
+
+# Easy-Mode preset slots (A/B/C = 0/1/2). Programming the slots writes a preset
+# onto the machine; it does NOT brew.
+#
+# ⚠️ Slot save is a BATCH-OF-THREE, no-commit operation (reverse-engineered from
+# two vendor-app captures + confirmed on hardware). The app writes all three
+# slots (A, B, C) as ``0x2CF6`` frames back-to-back — each acked by the machine
+# with a ``58 02 07 f6 2c … c2 d204`` notification — and then the machine saves
+# the whole set atomically, signalled by a ``0xf8`` notify and the status
+# progression ``0x43`` (saving) → ``0x25`` (saved) → ``0x01`` (idle). There is NO
+# separate "commit" frame: writing a single slot (or adding a trailing commit)
+# leaves the machine hung at ``0x43`` and it shows RETRY. So the client always
+# writes all three at once. See :meth:`XBloomClient.save_slots`.
 CMD_SAVE_SLOT = 0x2CF6  # 11510
 SLOT_FLAG_SCALE_ON = 0x12
 SLOT_FLAG_SCALE_OFF = 0x02
@@ -240,7 +260,9 @@ def build_save_slot(recipe: Mapping, slot: int, scale: bool = True) -> bytes:
 
     This programs a preset only — it never starts a brew (the command is
     ``0x2CF6``, never ``0x42``/``0x46``). Verified byte-for-byte against the
-    vendor app's captured slot writes.
+    vendor app's captured slot writes. Note the machine only *stores* the slots
+    once all three (A/B/C) have been written in one batch — see
+    :meth:`XBloomClient.save_slots`.
     """
     if slot not in (0, 1, 2):
         raise ValueError(f"slot must be 0 (A), 1 (B) or 2 (C); got {slot!r}")
@@ -252,12 +274,3 @@ def build_save_slot(recipe: Mapping, slot: int, scale: bool = True) -> bytes:
                      + b"\x00\x00\x00\x00" + payload)
     body[5:9] = struct.pack("<I", len(body) + 2)             # 4-byte LEN incl. CRC
     return bytes(body) + struct.pack("<H", crc16_kermit(bytes(body)))
-
-
-def build_slot_commit() -> bytes:
-    """The commit frame sent right AFTER a slot write to apply it (command ``0x9e4e``).
-
-    Without this the machine receives the slot data but does not store it (it
-    shows a retry/error). This carries no brew-start opcode. Byte-exact vs the app.
-    """
-    return xbloom_frame(0x4E, 0x9E, bytes([0x01]))

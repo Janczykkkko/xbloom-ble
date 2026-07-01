@@ -6,6 +6,9 @@ Subcommands:
 * ``xbloom validate <recipe>`` — validate a recipe file.
 * ``xbloom brew <recipe>``     — load a recipe and stream telemetry. **Loads
   only** — the machine prompts and the human approves the brew on the device.
+* ``xbloom save-slots A B C``   — program the machine's three Easy-Mode dial
+  presets from three recipes (a preset write — never brews). Presets live on the
+  machine; the xBloom app overwrites them if you reassign a slot there.
 * ``xbloom cloud …``           — push recipes to your xBloom **app account** via
   the *unofficial* xBloom cloud REST API (separate from BLE machine control).
   Recipes created here are named ``AUTO <name>`` and are the only ones this tool
@@ -145,24 +148,35 @@ async def _cmd_brew(args) -> int:
 
 
 # ---------------------------------------------------------------------------
-# save-slot (write an Easy-Mode preset — does NOT brew)
+# save-slots (program the three Easy-Mode presets — does NOT brew)
 # ---------------------------------------------------------------------------
-_SLOTS = {"a": 0, "b": 1, "c": 2, "1": 0, "2": 1, "3": 2}
+SLOTS_RECONNECT_WARNING = (
+    "⚠️  These presets live ON THE MACHINE. If you later open the xBloom app and "
+    "reassign a slot, the app pushes ITS choices over Bluetooth and overwrites "
+    "these. Program the slots to drive the machine from its dial (no app)."
+)
 
 
-async def _cmd_save_slot(args) -> int:
+async def _cmd_save_slots(args) -> int:
     import os
 
     from .client import XBloomClient, scan
 
-    key = str(args.slot).lower()
-    if key not in _SLOTS:
-        print(f"ERROR: slot must be A/B/C (or 1/2/3); got {args.slot!r}")
+    # Load all three recipes (A, B, C) — the machine only stores a full set.
+    recipes = []
+    for src in (args.slot_a, args.slot_b, args.slot_c):
+        recipe, err = _load_recipe_or_exit(src)
+        if err is not None:
+            return err
+        recipes.append(recipe)
+
+    # --scale-off is a comma list of slot letters whose stored preset has the
+    # scale disabled (default: all three on).
+    off = {s.strip().upper() for s in (args.scale_off or "").split(",") if s.strip()}
+    if off - {"A", "B", "C"}:
+        print(f"ERROR: --scale-off takes slot letters A/B/C; got {args.scale_off!r}")
         return 2
-    slot = _SLOTS[key]
-    recipe, err = _load_recipe_or_exit(args.recipe)
-    if err is not None:
-        return err
+    scales = [letter not in off for letter in "ABC"]
 
     address = args.address or os.environ.get("XBLOOM_ADDRESS")
     if not address:
@@ -174,17 +188,19 @@ async def _cmd_save_slot(args) -> int:
         address = devices[0].address
         print(f"Using {address}.")
 
-    scale = not args.no_scale
-    label = "ABC"[slot]
-    print(f"Writing '{recipe.name}' to slot {label} (scale {'on' if scale else 'off'}) — "
-          "a preset, NOT a brew…")
+    for letter, recipe, on in zip("ABC", recipes, scales, strict=True):
+        print(f"  slot {letter} ← '{recipe.name}' (scale {'on' if on else 'off'})")
+    print("Writing all three presets — NOT a brew…")
     try:
         async with XBloomClient(address) as client:
-            await client.save_slot(recipe, slot, scale=scale)
+            await client.save_slots(recipes, scale=scales)
     except Exception as exc:  # noqa: BLE001 - surface any BLE error cleanly
         print(f"ERROR: {exc}")
+        print("(If the machine shows RETRY: make sure the phone/app is disconnected "
+              "so the machine has a single BLE link, then try again.)")
         return 3
-    print(f"✓ Saved to slot {label}. The machine stored the preset (it did not brew).")
+    print("✓ Presets stored to slots A/B/C. The machine did not brew.")
+    print(SLOTS_RECONNECT_WARNING)
     return 0
 
 
@@ -318,13 +334,20 @@ def build_parser() -> argparse.ArgumentParser:
                         help="scan seconds when no address given (default 8)")
 
     s_slot = sub.add_parser(
-        "save-slot",
-        help="write a recipe to a machine preset slot A/B/C (a preset — does NOT brew)",
+        "save-slots",
+        help="program the 3 machine preset slots A/B/C from 3 recipes (presets — NOT a brew)",
+        description="Program the machine's three Easy-Mode dial presets (A, B, C) from three "
+        "recipes, in one batch. The machine only stores a full A/B/C set, so all three are "
+        "required. Presets live on the machine; reassigning a slot in the xBloom app will "
+        "overwrite them. Never starts a brew.",
     )
-    s_slot.add_argument("slot", help="slot to program: A/B/C (or 1/2/3)")
-    s_slot.add_argument("recipe", help="path to a recipe YAML, or an http(s):// URL")
-    s_slot.add_argument("--no-scale", action="store_true",
-                        help="disable the on-brew scale in the stored preset (default: enabled)")
+    _rc = "recipe YAML path or http(s):// URL"
+    s_slot.add_argument("slot_a", metavar="RECIPE_A", help=f"slot A {_rc}")
+    s_slot.add_argument("slot_b", metavar="RECIPE_B", help=f"slot B {_rc}")
+    s_slot.add_argument("slot_c", metavar="RECIPE_C", help=f"slot C {_rc}")
+    s_slot.add_argument("--scale-off", metavar="LETTERS",
+                        help="comma list of slots whose stored preset disables the scale, "
+                        "e.g. 'C' or 'A,C' (default: all on)")
     s_slot.add_argument("--address", help="machine BLE address (or set XBLOOM_ADDRESS)")
     s_slot.add_argument("--scan-timeout", type=float, default=8.0,
                         help="scan seconds when no address given (default 8)")
@@ -386,9 +409,9 @@ def main(argv: list[str] | None = None) -> int:
         except KeyboardInterrupt:
             print("\nInterrupted.")
             return 130
-    if args.command == "save-slot":
+    if args.command == "save-slots":
         try:
-            return asyncio.run(_cmd_save_slot(args))
+            return asyncio.run(_cmd_save_slots(args))
         except KeyboardInterrupt:
             print("\nInterrupted.")
             return 130
