@@ -145,6 +145,50 @@ async def _cmd_brew(args) -> int:
 
 
 # ---------------------------------------------------------------------------
+# save-slot (write an Easy-Mode preset — does NOT brew)
+# ---------------------------------------------------------------------------
+_SLOTS = {"a": 0, "b": 1, "c": 2, "1": 0, "2": 1, "3": 2}
+
+
+async def _cmd_save_slot(args) -> int:
+    import os
+
+    from .client import XBloomClient, scan
+
+    key = str(args.slot).lower()
+    if key not in _SLOTS:
+        print(f"ERROR: slot must be A/B/C (or 1/2/3); got {args.slot!r}")
+        return 2
+    slot = _SLOTS[key]
+    recipe, err = _load_recipe_or_exit(args.recipe)
+    if err is not None:
+        return err
+
+    address = args.address or os.environ.get("XBLOOM_ADDRESS")
+    if not address:
+        print("No --address / XBLOOM_ADDRESS given; scanning…")
+        devices = await scan(timeout=args.scan_timeout)
+        if not devices:
+            print("ERROR: no xBloom machine found. Pass --address or set XBLOOM_ADDRESS.")
+            return 2
+        address = devices[0].address
+        print(f"Using {address}.")
+
+    scale = not args.no_scale
+    label = "ABC"[slot]
+    print(f"Writing '{recipe.name}' to slot {label} (scale {'on' if scale else 'off'}) — "
+          "a preset, NOT a brew…")
+    try:
+        async with XBloomClient(address) as client:
+            await client.save_slot(recipe, slot, scale=scale)
+    except Exception as exc:  # noqa: BLE001 - surface any BLE error cleanly
+        print(f"ERROR: {exc}")
+        return 3
+    print(f"✓ Saved to slot {label}. The machine stored the preset (it did not brew).")
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # cloud (unofficial xBloom cloud REST API — pushes to the app account)
 # ---------------------------------------------------------------------------
 CLOUD_NOTE = (
@@ -273,6 +317,18 @@ def build_parser() -> argparse.ArgumentParser:
     s_brew.add_argument("--scan-timeout", type=float, default=8.0,
                         help="scan seconds when no address given (default 8)")
 
+    s_slot = sub.add_parser(
+        "save-slot",
+        help="write a recipe to a machine preset slot A/B/C (a preset — does NOT brew)",
+    )
+    s_slot.add_argument("slot", help="slot to program: A/B/C (or 1/2/3)")
+    s_slot.add_argument("recipe", help="path to a recipe YAML, or an http(s):// URL")
+    s_slot.add_argument("--no-scale", action="store_true",
+                        help="disable the on-brew scale in the stored preset (default: enabled)")
+    s_slot.add_argument("--address", help="machine BLE address (or set XBLOOM_ADDRESS)")
+    s_slot.add_argument("--scan-timeout", type=float, default=8.0,
+                        help="scan seconds when no address given (default 8)")
+
     # cloud — unofficial xBloom cloud REST API (pushes to the app account)
     s_cloud = sub.add_parser(
         "cloud",
@@ -327,6 +383,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "brew":
         try:
             return asyncio.run(_cmd_brew(args))
+        except KeyboardInterrupt:
+            print("\nInterrupted.")
+            return 130
+    if args.command == "save-slot":
+        try:
+            return asyncio.run(_cmd_save_slot(args))
         except KeyboardInterrupt:
             print("\nInterrupted.")
             return 130

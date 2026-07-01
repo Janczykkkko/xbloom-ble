@@ -71,6 +71,9 @@ __all__ = [
     "build_a8",
     "build_41",
     "build_load_frames",
+    "build_save_slot",
+    "build_slot_commit",
+    "CMD_SAVE_SLOT",
     "FORBIDDEN_COMMIT_OPCODE",
     "FORBIDDEN_START_OPCODE",
 ]
@@ -180,7 +183,12 @@ def _pour_segments(p: Mapping) -> list[bytes]:
 
 def build_41(pours: Iterable[Mapping], grind: int, tail: int = 0xA0) -> bytes:
     """0x41 pours+grind payload: ``01 | LEN(u8) | <segments> | grind | tail``."""
-    body = b"".join(seg for p in pours for seg in _pour_segments(p))
+    segs: list[bytes] = []
+    for i, p in enumerate(pours):
+        # RPM is carried ONLY on the first pour — the machine zeroes it on later
+        # pours (verified byte-for-byte against the vendor app's captures).
+        segs.extend(_pour_segments({**p, "rpm": 0} if i else p))
+    body = b"".join(segs)
     return bytes([0x01, len(body) & 0xFF]) + body + bytes([int(grind) & 0xFF, tail & 0xFF])
 
 
@@ -210,3 +218,46 @@ def build_load_frames(recipe: Mapping) -> list[bytes]:
         if fr[3] in (FORBIDDEN_COMMIT_OPCODE, FORBIDDEN_START_OPCODE):  # pragma: no cover
             raise AssertionError("load frames must never contain a brew-start opcode")
     return frames
+
+
+# Easy-Mode preset slots (A/B/C = 0/1/2). Writing a slot programs a preset onto
+# the machine; it does NOT brew.
+CMD_SAVE_SLOT = 0x2CF6  # 11510
+SLOT_FLAG_SCALE_ON = 0x12
+SLOT_FLAG_SCALE_OFF = 0x02
+
+
+def build_save_slot(recipe: Mapping, slot: int, scale: bool = True) -> bytes:
+    """Build the frame that writes ``recipe`` to Easy-Mode preset ``slot`` (0=A, 1=B, 2=C).
+
+    Frame::
+
+        58 01 02 | f6 2c(=0x2CF6) | LEN(u32 LE) | 01 | slot | flags | <0x41 blob> | CRC16
+
+    ``flags`` is ``0x12`` with the on-brew **scale enabled** (the default) or
+    ``0x02`` with it disabled. The ``<0x41 blob>`` is the same pours+grind+ratio
+    body as the LOAD ``0x41`` frame (minus its leading ``0x01``).
+
+    This programs a preset only — it never starts a brew (the command is
+    ``0x2CF6``, never ``0x42``/``0x46``). Verified byte-for-byte against the
+    vendor app's captured slot writes.
+    """
+    if slot not in (0, 1, 2):
+        raise ValueError(f"slot must be 0 (A), 1 (B) or 2 (C); got {slot!r}")
+    tail = recipe.get("tail", 0xA0)
+    blob = build_41(recipe["pours"], recipe["grind"], tail)  # 01 | len | pours | grind | tail
+    flags = SLOT_FLAG_SCALE_ON if scale else SLOT_FLAG_SCALE_OFF
+    payload = bytes([0x01, slot, flags]) + blob[1:]          # drop the 0x41 leading 0x01
+    body = bytearray(bytes([0x58, 0x01, 0x02]) + struct.pack("<H", CMD_SAVE_SLOT)
+                     + b"\x00\x00\x00\x00" + payload)
+    body[5:9] = struct.pack("<I", len(body) + 2)             # 4-byte LEN incl. CRC
+    return bytes(body) + struct.pack("<H", crc16_kermit(bytes(body)))
+
+
+def build_slot_commit() -> bytes:
+    """The commit frame sent right AFTER a slot write to apply it (command ``0x9e4e``).
+
+    Without this the machine receives the slot data but does not store it (it
+    shows a retry/error). This carries no brew-start opcode. Byte-exact vs the app.
+    """
+    return xbloom_frame(0x4E, 0x9E, bytes([0x01]))

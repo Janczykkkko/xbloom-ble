@@ -15,7 +15,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 
-from .protocol import build_load_frames
+from .protocol import build_load_frames, build_save_slot, build_slot_commit
 from .recipe import Recipe
 from .telemetry import StatusEvent, parse_notification
 
@@ -182,6 +182,33 @@ class XBloomClient:
             armed = await self._drain_until_state(STATE_ARMED, self.ack_timeout)
             log.info("recipe loaded — machine armed (awaiting human approval)")
             return armed
+        finally:
+            await self._stop_notify()
+
+    async def save_slot(self, recipe: Recipe, slot: int, *, scale: bool = True) -> None:
+        """Write ``recipe`` to an Easy-Mode preset ``slot`` (0=A, 1=B, 2=C).
+
+        Programs a machine preset so it can be brewed hands-free later. **This
+        does not brew** — the command is ``0x2CF6`` (slot write), never a
+        brew-start opcode. ``scale`` controls whether the on-brew scale is
+        enabled in the stored preset (default on).
+        """
+        if self._client is None or not self._client.is_connected:
+            raise XBloomError("not connected")
+        recipe.validate()
+        frame = build_save_slot(recipe.to_protocol_dict(), slot, scale=scale)
+        await self._start_notify()
+        try:
+            # Slot write, then the commit that applies it. NO a4 session-open — that
+            # opens a brew-load session (machine then expects a6/a8/41) and makes a
+            # following slot write error/RETRY.
+            log.info("→ save-slot %s (cmd=0x%02x, scale=%s)", "ABC"[slot], frame[3], scale)
+            await self._client.write_gatt_char(CHAR_COMMAND, frame, response=False)
+            await self._await_ack(frame[3])
+            log.info("→ commit slot write (0x9e4e)")
+            await self._client.write_gatt_char(CHAR_COMMAND, build_slot_commit(), response=False)
+            await self._await_ack(0x4E)
+            log.info("preset written to slot %s", "ABC"[slot])
         finally:
             await self._stop_notify()
 
