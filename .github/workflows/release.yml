@@ -13,6 +13,7 @@ name: Release
 on:
   push:
     branches: [main]
+  workflow_dispatch: {}  # manual re-trigger (Actions → Release → Run workflow)
 
 permissions:
   contents: read

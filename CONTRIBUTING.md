@@ -14,9 +14,10 @@ protocol, or wiring it into your smart home, you're in the right place.
   Types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`,
   `revert`. Examples: `feat: add scale-tare command`, `fix: correct pour pattern mapping`.
   Breaking change → `feat!:` or a `BREAKING CHANGE:` footer.
-- Releases are **fully automated** (`feat` → minor, `fix` → patch, breaking → major) and
-  published to PyPI — you never bump the version or tag by hand. See
-  [docs/RELEASING.md](docs/RELEASING.md).
+- Releases are **fully automated** by semantic-release (`feat` → minor, `fix` → patch,
+  breaking → major): merging a PR to `main` bumps the version, tags, writes release notes, and
+  **publishes to PyPI via Trusted Publishing** (OIDC — no tokens). You never bump the version or
+  tag by hand. See [docs/RELEASING.md](docs/RELEASING.md).
 
 ## Dev setup
 
