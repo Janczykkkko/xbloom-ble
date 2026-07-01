@@ -136,6 +136,13 @@ It validates, connects, **loads** the recipe, then prints:
 timeout (`--timeout`, default 300 s) elapses. A telemetry log is written to
 `./telemetry-<timestamp>.json`.
 
+The recipe argument to `brew` / `validate` / `cloud` can also be an **`http(s)://`
+URL** — so a recipe can be served and brewed without downloading it first:
+
+```bash
+xbloom brew https://xbloom.lodywgumce.tv/r/teso-la-leona.yaml
+```
+
 Common flags: `--address`, `--timeout`, `-v/--verbose`, `--version`.
 
 ### Push recipes to your app account (cloud)

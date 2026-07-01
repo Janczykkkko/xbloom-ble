@@ -137,6 +137,32 @@ class Recipe:
             raise RecipeError(f"recipe file {path} is empty")
         return cls.from_dict(data)
 
+    @classmethod
+    def from_yaml_text(cls, text: str, *, origin: str = "<text>") -> Recipe:
+        """Load and validate a recipe from a YAML string."""
+        data = yaml.safe_load(text)
+        if data is None:
+            raise RecipeError(f"recipe {origin} is empty")
+        return cls.from_dict(data)
+
+    @classmethod
+    def from_source(cls, src: str | Path, *, timeout: float = 15.0) -> Recipe:
+        """Load a recipe from a local path **or** an ``http(s)://`` URL.
+
+        URLs are fetched with a short timeout and a 1 MB size cap; the body is
+        parsed as the same YAML recipe format. Lets recipes be shared/served
+        (e.g. ``xbloom brew https://…/teso-la-leona.yaml``).
+        """
+        s = str(src)
+        if s.startswith(("http://", "https://")):
+            from urllib.request import Request, urlopen
+
+            req = Request(s, headers={"User-Agent": "xbloom-ble"})
+            with urlopen(req, timeout=timeout) as resp:  # noqa: S310 - user-supplied URL
+                text = resp.read(1_000_000).decode("utf-8")
+            return cls.from_yaml_text(text, origin=s)
+        return cls.from_yaml(s)
+
     # ------------------------------------------------------------------
     # Validation
     # ------------------------------------------------------------------
