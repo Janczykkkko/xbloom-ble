@@ -13,29 +13,37 @@ recipe, validate it, **load it onto the machine**, and watch live brew telemetry
 It is a public, MIT-licensed, open-source project with a clean CLI and a fully
 documented protocol so others can build on it.
 
-## 🛑 HARD SAFETY INVARIANT — do not break this
+## 🛑 SAFETY MODEL — do not break the load-only default
 
-**The tool only ever LOADS a recipe. The machine then prompts, and a human
-physically approves the brew ON THE MACHINE to start it. The tool must NEVER start
-a brew.**
+**The default `brew` path only ever LOADS a recipe. The machine then prompts, and
+a human physically approves the brew ON THE MACHINE to start it.** That default is
+the headline differentiator and must never regress. A separate, explicit, opt-in
+`start` path exists for power users who *choose* an unattended brew.
 
 Concretely:
 
 - The xBloom BLE protocol has opcodes that force-start a brew: **`0x42` (commit)
-  and `0x46` (start)**. **Never build, emit, or send these opcodes. Never add an
-  auto-start / auto-confirm code path.**
+  and `0x46` (start)**, plus the execute opcode **`0x119A`** (4506). **The LOAD
+  path must NEVER build, emit, or send these.**
 - `build_load_frames()` returns **exactly four** LOAD frames (`0xa4`, `0xa6`,
   `0xa8`, `0x41`) and nothing else. There is a belt-and-braces assertion in it that
   rejects a forbidden opcode if one ever crept in — keep it.
-- There is a **test guarding this** (`tests/test_protocol.py::test_no_forbidden_opcodes`,
-  plus `test_load_frames_opcode_order`). **Keep these tests; never weaken or delete
-  them.** If you touch the protocol layer, they must still pass.
-- After a load, the machine reports state `0x1f` (armed) and waits for the human.
-  That on-machine approval is the safety gate — a controller cannot brew on an empty
-  machine. Preserve that property in any change.
+- **Brew-start lives ONLY in `build_start_frames()`** — a distinct builder used
+  solely by the explicit `xbloom start` / `xbloom brew --start` command. It is the
+  only place a start/execute opcode may appear, and it always extends (never
+  replaces) the load prefix. Do **not** let the default `brew` reach it, and do
+  **not** merge the two builders.
+- Tests guard this: `tests/test_protocol.py::test_no_forbidden_opcodes`,
+  `test_load_frames_opcode_order`, `test_load_path_never_has_start_frames`, and
+  `test_start_path_load_prefix_still_load_only`. **Keep these; never weaken or
+  delete them.** If you touch the protocol layer, they must still pass.
+- After a plain load, the machine reports state `0x1f` (armed) and waits for the
+  human. That on-machine approval is the safety gate for the default path.
 
-If a feature request would require auto-starting a brew, **decline it** and explain
-this invariant instead.
+The lower-level controls (`grind`, `pour`, `save-slot`, `scale tare`) and `start`
+are **explicit** actions that act on the machine — always keep their loud ⚠️
+warnings. If a request would make the **default** `brew` auto-start, **decline it**
+and point at the opt-in `start` command instead.
 
 ## 🔒 No-personal-data rule (this repo is PUBLIC)
 

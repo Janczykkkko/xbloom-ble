@@ -22,21 +22,38 @@ CLI and a fully documented protocol so others can build on it.
 
 ---
 
-## ⚠️ Safety — this tool only *loads*, it never auto-starts
+## ⚠️ Safety — `brew` is load-only by default
 
-This is the headline design decision and a hard invariant:
+This is the headline design decision:
 
-> **`xbloom-ble` only ever LOADS a recipe onto the machine. It sends the load
-> sequence, the machine then prompts you, and YOU physically approve the brew on
-> the machine itself. The tool will never start a brew for you.**
+> **The default `xbloom brew` command only ever LOADS a recipe onto the machine.
+> It sends the load sequence, the machine then prompts you, and YOU physically
+> approve the brew on the machine itself. `brew` will never start a brew for you.**
 
-The xBloom BLE protocol *does* have opcodes that force-start a brew (`0x42`
-commit and `0x46` start). **This package never builds or sends them.** There is
-intentionally no code path that emits `0x42`/`0x46` — `build_load_frames()`
-returns only the four LOAD frames, and there is even a belt-and-braces assertion
-that rejects a forbidden opcode if one ever crept in. So the worst this tool can
-do is arm a recipe you then have to confirm by hand, with the cup and beans in
-front of you.
+`build_load_frames()` returns only the four LOAD frames. It never emits the
+protocol's brew-start opcodes (`0x42` commit / `0x46` start), and a
+belt-and-braces assertion rejects a forbidden opcode if one ever crept into that
+path. So the default is: the worst this tool can do is *arm* a recipe you then
+confirm by hand, with the cup and beans in front of you.
+
+### Lower-level controls and opt-in start are **explicit** actions
+
+The package also exposes lower-level controls that **do act on the machine**.
+These are **separate, explicit** commands — never the default `brew` behaviour —
+each with a loud warning:
+
+- **`xbloom grind`** — runs the grinder (no brew).
+- **`xbloom pour`** — a FreeSolo single pour that **dispenses hot water**.
+- **`xbloom save-slot`** — writes an Easy-Mode preset to a slot (no brew).
+- **`xbloom scale tare` / `units`** — zero the scale / set the weight unit.
+- **`xbloom start`** (and **`xbloom brew --start`**) — the **opt-in full brew**:
+  loads the recipe *and* starts it. This is the ONLY path that emits a brew-start
+  opcode, and it lives in a distinct builder (`build_start_frames`), kept strictly
+  separate from `build_load_frames` so the default can never reach it.
+
+Read-only commands (`scan`, `validate`, `info`, `scale read`) don't act on the
+machine at all. If you just want the safe default, use `brew` — everything that
+acts on the machine is opt-in and clearly marked ⚠️.
 
 ---
 
@@ -128,6 +145,117 @@ weights) until the brew completes or the timeout (`--timeout`, default 300 s)
 elapses. A telemetry log is written to `./telemetry-<timestamp>.json`.
 
 Common flags: `--address`, `--timeout`, `-v/--verbose`, `--version`.
+
+### Machine info (read-only)
+
+```bash
+xbloom info
+```
+
+Connects and prints decoded machine info — serial, firmware, water level, and
+the temperature/weight units — then disconnects. Read-only.
+
+### Scale
+
+```bash
+xbloom scale read      # read the current weight in grams (free / read-only)
+xbloom scale tare      # ⚠️ zero the scale (acts on the machine)
+xbloom scale units g   # set the weight unit: g | oz | ml
+```
+
+### ⚠️ Grind only (no brew)
+
+```bash
+xbloom grind --size 30 --dose 16
+```
+
+Runs the grinder at grind size `30` for a `16 g` dose. **This runs the grinder** —
+make sure beans are loaded. It does not brew.
+
+### ⚠️ FreeSolo pour (dispenses hot water)
+
+```bash
+xbloom pour --ml 200 --temp 92 --flow 3.0 --pattern spiral
+```
+
+Dispenses a single pour of hot water at the given volume/temperature/flow/pattern.
+**This dispenses HOT WATER** — make sure a cup is in place. It sends the FreeSolo
+preamble (handshake, bypass+dose, set-cup, scale tare) then the pour.
+
+### Save an Easy-Mode preset (no brew)
+
+```bash
+xbloom save-slot 1 recipes/example-washed.yaml
+```
+
+Writes the recipe as an Easy-Mode preset to slot `1`, `2`, or `3` (A/B/C). This
+is a stateful write to the machine but **does not brew**.
+
+### ⚠️ Start a brew (opt-in)
+
+```bash
+xbloom start recipes/example-washed.yaml
+# or, equivalently:
+xbloom brew recipes/example-washed.yaml --start
+```
+
+The **opt-in full brew**: loads the recipe *and* starts it (no on-machine
+approval step). Prints a loud warning first. Use this only on a staged machine
+with a cup and beans in place — it **will** start a brew. The plain
+`xbloom brew` (without `--start`) stays load-only.
+
+---
+
+## Cloud — push recipes to your xBloom app account
+
+A **separate subsystem** from everything above. The BLE commands talk to the
+machine over Bluetooth; the `cloud` command talks to the xBloom **cloud REST API**
+(`client-api.xbloom.com`), so a recipe you push here shows up in the **xBloom
+mobile app** under your account — ready to send to the machine from your phone.
+
+> ⚠️ **Unofficial API — use at your own risk.** There is no official xBloom cloud
+> API. The endpoints, the RSA-encrypted request format, and the recipe schema were
+> all **reverse-engineered by the community** (ported from
+> [`cryptofishbug/xbloom-recipe-cli`](https://github.com/cryptofishbug/xbloom-recipe-cli),
+> MIT — see the CHANGELOG). It **may break at any time** if xBloom changes their
+> backend, and it operates on **your own account**. This is unrelated to the
+> load-only BLE safety model — no brew is triggered; it only edits recipes in your
+> account.
+
+It needs the `cryptography` package, shipped as an optional extra:
+
+```bash
+pip install "xbloom-ble[cloud]"
+```
+
+Provide your account credentials via environment variables (never hardcode them):
+
+```bash
+export XBLOOM_EMAIL="you@example.com"
+export XBLOOM_PASSWORD="your-password"
+```
+
+Then:
+
+```bash
+xbloom cloud login                              # authenticate + cache the token
+xbloom cloud add-recipe recipes/example-washed.yaml   # push a recipe to your account
+xbloom cloud add-recipe recipes/example-washed.yaml --cup xpod   # pick the cup type
+xbloom cloud list                               # list recipes in your account
+xbloom cloud delete <tableId>                   # delete a recipe by id
+xbloom cloud fetch <share-id-or-url>            # read a public shared recipe (no login)
+```
+
+`login` caches the token + member id to `~/.config/xbloom-ble/cloud-auth.json`
+(override with `--auth-path` or `$XBLOOM_CLOUD_AUTH`) so later commands reuse it.
+If you skip `login` but have `XBLOOM_EMAIL`/`XBLOOM_PASSWORD` set, the library can
+log in on demand.
+
+Under the hood, authenticated request bodies are
+`Base64( RSA-1024 PKCS#1 v1.5 ( JSON ) )`, chunked Hutool-style (117-byte plaintext
+blocks → 128-byte cipher blocks). The 1024-bit RSA **public** key is embedded in
+the source (a public key — safe to ship). See
+[`xbloom_ble/cloud.py`](xbloom_ble/cloud.py).
 
 ---
 
@@ -255,13 +383,21 @@ echoes the command, e.g. `580207a6…`):
 
 After frame 4 the machine reports STATE `0x1f` (armed) and **waits for the human
 to approve on the machine**. The protocol's `0x42` (commit) and `0x46` (start)
-opcodes would force-start the brew — **this package never sends them.**
+opcodes would force-start the brew — **the load path never sends them** (they
+appear only in the explicit opt-in `start` path; see below).
 
 ### The `0x41` pours frame payload
 
 ```
-01 | LEN(u8 = #body bytes) | <pour segments…> | grind(u8) | tail(u8 = 0xa0)
+01 | LEN(u8 = #body bytes) | <pour segments…> | grind(u8) | tail(u8 = round(ratio×10))
 ```
+
+The final two bytes are **`[grinder_size][ratio×10]`**. The tail is the brew
+**ratio** encoded as `round(ratio × 10)` — e.g. 1:16 → `0xa0` (160), 1:17 →
+`0xaa` (170) — computed from the recipe's ratio (explicit, or derived from
+`Σ pour ml / dose_g`). (This resolves the previously-undecoded "tail" byte,
+reconciled against the [brAzzi64/xbloom-ble](https://github.com/brAzzi64/xbloom-ble)
+`grandWater` field.)
 
 Each pour becomes an **8-byte segment**:
 
@@ -288,6 +424,40 @@ Each pour becomes an **8-byte segment**:
 **Large pours:** a pour above 127 ml is split into 127-ml **4-byte lead
 segments** (`[ml, temp, pat, agit]`) followed by an 8-byte remainder segment
 carrying the flow/pause/rpm fields.
+
+### Lower-level control commands
+
+Beyond the LOAD sequence, the machine accepts these commands (opcodes ported
+from and cross-validated against [brAzzi64/xbloom-ble](https://github.com/brAzzi64/xbloom-ble)).
+A command is named here by its 16-bit code; on the wire that code is
+little-endian, so it splits into this package's `CMD(u8) | SEQ(u8)` framing as
+**cmd = low byte, seq = high byte** (e.g. `0x1FA6` → `cmd 0xa6, seq 0x1f`). Our
+LOAD opcodes `a4`/`a6`/`a8` are exactly the reference's `8100`/`8102`/`8104`.
+
+| Command      | Code (16-bit) | cmd / seq | Payload                          | In `xbloom-ble` |
+|--------------|---------------|-----------|----------------------------------|-----------------|
+| Machine info | `0x9E49` (40521) | `49`/`9e` | none (query)                  | `info`          |
+| Scale tare   | `0x2134` (8500)  | `34`/`21` | none                          | `scale tare`    |
+| Scale units  | `0x1F45` (8005)  | `45`/`1f` | int (0=g, 1=oz, 2=ml)         | `scale units`   |
+| Grind start  | `0x0DAC` (3500)  | `ac`/`0d` | `[1000, size, speed]`         | `grind`         |
+| Grind stop   | `0x0DB1` (3505)  | `b1`/`0d` | none                          | (internal)      |
+| Handshake    | `0x1FA4` (8100)  | `a4`/`1f` | `[185, 1]`                    | preamble        |
+| Bypass+dose  | `0x1FA6` (8102)  | `a6`/`1f` | `[vol_f, temp_f, dose_i]`     | preamble        |
+| Set cup      | `0x1FA8` (8104)  | `a8`/`1f` | `[max_f, min_f]`              | preamble        |
+| Pour recipe  | `0x1F44` (8004)  | `44`/`1f` | recipe blob (0x41-style body) | `pour`          |
+| Execute/start| `0x119A` (4506)  | `9a`/`11` | none                          | `pour`, `start` |
+| Save slot    | `0x2CF6` (11510) | `f6`/`2c` | `[slot_idx][flags][blob]`     | `save-slot`     |
+
+- **Type-1** command payloads are a `0x01` marker followed by N 4-byte
+  little-endian values (floats for float fields, ints otherwise).
+- **Type-2** (`save-slot`) is a `0x01` marker followed by a raw byte blob:
+  `[slot_idx (0/1/2)][flags][recipe blob]`. **Flags** is a bitfield — grinder ON
+  `0x02` / grinder OFF `0x04`, scale `0x10` (so scale+grinder = `0x12`).
+- **FreeSolo pour** = handshake → bypass+dose → set-cup → (optional) scale tare →
+  pour recipe blob → execute.
+- **Brew start** (`xbloom start` / `brew --start`) = the four LOAD frames →
+  handshake → bypass+dose → set-cup → scale tare → execute (`0x119A`). This is
+  the **only** path that emits `0x119A`; the default `brew` never does.
 
 ### Status notifications (`ffe2`)
 
@@ -327,6 +497,11 @@ async def main():
 asyncio.run(main())
 ```
 
+`XBloomClient` also exposes the explicit lower-level controls:
+`get_machine_info()`, `read_scale()`, `tare_scale()`, `set_scale_units()`,
+`grind()`, `pour()`, `save_slot()`, and `start_brew()` (the opt-in full brew).
+`load_recipe()` remains load-only; only `start_brew()` starts a brew.
+
 `xbloom_ble.protocol` is pure (no BLE) and is the place to start if you want to
 build a different front-end:
 
@@ -359,10 +534,13 @@ their respective owner.
 
 The protocol here was reverse-engineered and may be incomplete or wrong; it may
 break with firmware updates. **Use at your own risk — you assume full
-responsibility** for anything you do with your machine. By design this tool only
-*loads* recipes and **never auto-starts a brew**: the machine always prompts you
-and you approve the brew physically on the device. Even so, supervise your
-machine. No warranty (see [LICENSE](LICENSE)).
+responsibility** for anything you do with your machine. By design the default
+`brew` command only *loads* a recipe and the machine prompts you to approve the
+brew physically on the device. The lower-level controls (`grind`, `pour`,
+`save-slot`) and the opt-in `start` / `brew --start` are **explicit** actions
+that act on the machine — they dispense water, run the grinder, or start a brew;
+use them only on a supervised, staged machine. **Always supervise your machine.**
+No warranty (see [LICENSE](LICENSE)).
 
 ## License
 

@@ -36,7 +36,10 @@ __all__ = [
     "IGNORED_STATES",
     "TERMINAL_STATES",
     "StatusEvent",
+    "MachineInfo",
     "parse_notification",
+    "parse_machine_info",
+    "parse_scale_weight",
     "is_idle_or_complete",
 ]
 
@@ -146,3 +149,103 @@ def parse_notification(data: bytes) -> Optional[StatusEvent]:
 def is_idle_or_complete(event: StatusEvent) -> bool:
     """True if the event indicates the brew is over (complete or back to idle)."""
     return event.state in TERMINAL_STATES
+
+
+# ---------------------------------------------------------------------------
+# Machine-info blob  (reply to the 40521 query — see protocol.build_machine_info_query)
+# ---------------------------------------------------------------------------
+@dataclass
+class MachineInfo:
+    """Decoded machine-info blob: serial, firmware, and unit/status flags.
+
+    Fields are best-effort per brAzzi64's field map; any that don't decode
+    cleanly are left ``None`` (the byte layout can vary across firmware).
+    """
+
+    serial: Optional[str] = None
+    firmware: Optional[str] = None
+    water_ok: Optional[bool] = None
+    system_status: Optional[int] = None
+    grinder: Optional[int] = None
+    temp_unit: Optional[str] = None       # "C" or "F"
+    weight_unit: Optional[str] = None     # "g" or "oz"
+    raw: bytes = b""
+
+    def __str__(self) -> str:
+        bits = []
+        if self.serial:
+            bits.append(f"serial={self.serial}")
+        if self.firmware:
+            bits.append(f"fw={self.firmware}")
+        if self.water_ok is not None:
+            bits.append("water=ok" if self.water_ok else "water=low")
+        if self.grinder is not None:
+            bits.append(f"grinder={self.grinder}")
+        if self.temp_unit:
+            bits.append(f"temp={self.temp_unit}")
+        if self.weight_unit:
+            bits.append(f"weight={self.weight_unit}")
+        return " ".join(bits) or "machine-info (undecoded)"
+
+
+def _ascii_field(fields: bytes, start: int, end: int) -> Optional[str]:
+    """Extract a printable-ASCII field from ``fields[start:end]``, or ``None``."""
+    chunk = fields[start:end]
+    if not chunk:
+        return None
+    text = "".join(chr(b) for b in chunk if 0x20 <= b < 0x7F)
+    text = text.strip()
+    return text or None
+
+
+def parse_machine_info(data: bytes) -> Optional[MachineInfo]:
+    """Decode a machine-info reply notification into a :class:`MachineInfo`.
+
+    ``data`` may be ``bytes``, ``bytearray`` or a hex string. The information
+    fields live in the payload (after the frame header, before the CRC). Offsets
+    follow brAzzi64's decode; decoding is defensive so a short/odd frame simply
+    yields whatever fields are recoverable rather than raising.
+    """
+    if isinstance(data, str):
+        data = bytes.fromhex(data.replace(" ", ""))
+    else:
+        data = bytes(data)
+    if len(data) < 12 or data[0] != 0x58:
+        return None
+
+    # Payload = frame minus the 9-byte header (58 01 01 cmd seq len len 00 00)
+    # and the trailing 2-byte CRC. brAzzi64 reads the info fields from that body.
+    fields = data[9:-2]
+    info = MachineInfo(raw=data)
+    info.serial = _ascii_field(fields, 0, 13)
+    info.firmware = _ascii_field(fields, 19, 29)
+    if len(fields) > 33:
+        info.water_ok = bool(fields[33])
+    if len(fields) > 34:
+        info.system_status = fields[34]
+    if len(fields) > 37:
+        info.grinder = max(1, fields[37] - 30)
+    if len(fields) > 39:
+        info.temp_unit = "F" if fields[39] else "C"
+    if len(fields) > 41:
+        info.weight_unit = "oz" if fields[41] else "g"
+    return info
+
+
+def parse_scale_weight(data: bytes) -> Optional[float]:
+    """Decode a live scale-weight notification (grams), or ``None``.
+
+    The scale streams weight as a little-endian IEEE-754 float in the payload
+    (brAzzi64: ``struct('<f', data[10:14])``). Returns the weight in grams if it
+    looks sane, else ``None``.
+    """
+    if isinstance(data, str):
+        data = bytes.fromhex(data.replace(" ", ""))
+    else:
+        data = bytes(data)
+    if len(data) < 14 or data[0] != 0x58:
+        return None
+    grams = struct.unpack_from("<f", data, 10)[0]
+    if grams != grams or abs(grams) > 5000:  # NaN or implausible
+        return None
+    return round(grams, 1)

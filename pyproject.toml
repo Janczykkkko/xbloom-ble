@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "xbloom-ble"
-version = "0.1.0"
-description = "Unofficial Bluetooth LE control for the xBloom Studio coffee machine (loads recipes only — never auto-starts a brew)."
+version = "0.2.0"
+description = "Unofficial Bluetooth LE control for the xBloom Studio coffee machine (load-only by default; grind/pour/slot/start are explicit opt-in actions)."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -25,7 +25,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7", "ruff>=0.1"]
+# The cloud client (xbloom_ble.cloud / `xbloom cloud …`) needs RSA to encrypt
+# request bodies. Kept out of the core deps so a BLE-only install stays lean;
+# xbloom_ble.cloud imports cryptography lazily and errors helpfully if missing.
+cloud = ["cryptography>=41"]
+dev = ["pytest>=7", "ruff>=0.1", "cryptography>=41"]
 
 [project.urls]
 Homepage = "https://github.com/Janczykkkko/xbloom-ble"

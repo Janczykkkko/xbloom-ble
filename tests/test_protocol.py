@@ -21,8 +21,11 @@ import pytest
 from xbloom_ble.protocol import (
     FORBIDDEN_COMMIT_OPCODE,
     FORBIDDEN_START_OPCODE,
+    build_41,
     build_load_frames,
+    build_start_frames,
     crc16_kermit,
+    ratio_to_tail,
     xbloom_frame,
 )
 
@@ -115,6 +118,97 @@ def test_load_frames_opcode_order():
     """The four frames are exactly a4, a6, a8, 41 in order."""
     frames = build_load_frames(RECIPES["simple"])
     assert [f[3] for f in frames] == [0xA4, 0xA6, 0xA8, 0x41]
+
+
+# ---------------------------------------------------------------------------
+# Tail byte = round(ratio × 10)  (the decode fix)
+# ---------------------------------------------------------------------------
+def test_ratio_to_tail_known_values():
+    """1:16 → 0xa0 (160), 1:17 → 0xaa (170) — the captured tail bytes."""
+    assert ratio_to_tail(16) == 0xA0
+    assert ratio_to_tail(17) == 0xAA
+    assert ratio_to_tail(15) == 150
+    assert ratio_to_tail(16.5) == 165
+
+
+def test_load_frame_tail_from_ratio():
+    """build_load_frames encodes the 0x41 tail from recipe['ratio']."""
+    # 0x41 payload ends with [grind, tail]; tail is the 2nd-to-last frame byte
+    # (last two frame bytes are the CRC).
+    for ratio, want in ((16, 0xA0), (17, 0xAA)):
+        r = dict(RECIPES["simple"], ratio=ratio)
+        frame41 = build_load_frames(r)[3]
+        assert frame41[-3] == want, f"ratio {ratio} tail"
+
+
+def test_captured_run_tails_reproduced_from_ratio():
+    """The captured runs' ratios reproduce their captured tail bytes.
+
+    Run 0 (dose 15, Σml 240 → 1:16) → 0xa0; run 11 (dose 18, Σml 306 → 1:17) → 0xaa.
+    """
+    run0 = {
+        "dose": 15, "grind": 60, "ratio": 240 / 15,
+        "pours": [
+            {"ml": 50, "temp": 92, "pattern": "spiral", "agitation": True,
+             "pause": 45, "rpm": 120, "flow": 3.0},
+            {"ml": 70, "temp": 91, "pattern": "spiral", "agitation": False,
+             "pause": 5, "rpm": 0, "flow": 3.0},
+            {"ml": 65, "temp": 90, "pattern": "spiral", "agitation": False,
+             "pause": 5, "rpm": 0, "flow": 3.0},
+            {"ml": 55, "temp": 90, "pattern": "spiral", "agitation": False,
+             "pause": 5, "rpm": 0, "flow": 3.0},
+        ],
+    }
+    run11 = {
+        "dose": 18, "grind": 75, "ratio": 306 / 18,
+        "pours": [
+            {"ml": 79, "temp": 92, "pattern": "spiral", "agitation": False,
+             "pause": 15, "rpm": 90, "flow": 3.0},
+            {"ml": 107, "temp": 80, "pattern": "center", "agitation": False,
+             "pause": 20, "rpm": 0, "flow": 3.2},
+            {"ml": 65, "temp": 90, "pattern": "spiral", "agitation": False,
+             "pause": 5, "rpm": 0, "flow": 3.0},
+            {"ml": 55, "temp": 90, "pattern": "spiral", "agitation": False,
+             "pause": 5, "rpm": 0, "flow": 3.0},
+        ],
+    }
+    assert build_load_frames(run0)[3][-3] == 0xA0
+    assert build_load_frames(run11)[3][-3] == 0xAA
+
+
+def test_build_41_tail_default_is_a0():
+    """A recipe with no ratio keeps the 0xa0 (1:16) default tail (reference parity)."""
+    body = build_41(RECIPES["simple"]["pours"], RECIPES["simple"]["grind"])
+    assert body[-1] == 0xA0
+
+
+# ---------------------------------------------------------------------------
+# Brew-start path  (the ONLY place a start opcode may appear)
+# ---------------------------------------------------------------------------
+def test_start_frames_contain_load_prefix_and_start():
+    """build_start_frames = the 4 LOAD frames + a brew-start tail."""
+    frames = build_start_frames(RECIPES["simple"])
+    # first four are exactly the load frames
+    assert [f[3] for f in frames[:4]] == [0xA4, 0xA6, 0xA8, 0x41]
+    # more frames follow (the start preamble + execute)
+    assert len(frames) > 4
+    # the execute opcode 0x119A appears as cmd 0x9a / seq 0x11
+    assert any(f[3] == 0x9A and f[4] == 0x11 for f in frames), "execute frame present"
+
+
+def test_start_path_load_prefix_still_load_only():
+    """The LOAD prefix inside a start sequence never carries a forbidden opcode."""
+    frames = build_start_frames(RECIPES["simple"])
+    for f in frames[:4]:
+        assert f[3] not in (FORBIDDEN_COMMIT_OPCODE, FORBIDDEN_START_OPCODE)
+
+
+def test_load_path_never_has_start_frames():
+    """SAFETY: the load path is strictly shorter than / a prefix of the start path."""
+    load = build_load_frames(RECIPES["simple"])
+    start = build_start_frames(RECIPES["simple"])
+    assert len(load) == 4
+    assert start[:4] == load  # start extends load; load never gains start frames
 
 
 def test_crc16_kermit_known_vector():

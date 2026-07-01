@@ -15,9 +15,24 @@ import asyncio
 import logging
 from typing import Awaitable, Callable, Optional
 
-from .protocol import build_load_frames
+from .protocol import (
+    build_grind,
+    build_load_frames,
+    build_machine_info_query,
+    build_pour_frames,
+    build_save_slot,
+    build_scale_tare,
+    build_scale_units,
+    build_start_frames,
+)
 from .recipe import Recipe
-from .telemetry import StatusEvent, parse_notification
+from .telemetry import (
+    MachineInfo,
+    StatusEvent,
+    parse_machine_info,
+    parse_notification,
+    parse_scale_weight,
+)
 
 log = logging.getLogger("xbloom_ble")
 
@@ -79,6 +94,7 @@ class XBloomClient:
         self.ack_timeout = ack_timeout
         self._client = None
         self._notif_queue: "asyncio.Queue[StatusEvent]" = asyncio.Queue()
+        self._raw_queue: "asyncio.Queue[bytes]" = asyncio.Queue()
 
     # ------------------------------------------------------------------
     # Connection
@@ -110,7 +126,9 @@ class XBloomClient:
     # Notifications
     # ------------------------------------------------------------------
     def _on_notify(self, _sender, data: bytearray) -> None:
-        event = parse_notification(bytes(data))
+        raw = bytes(data)
+        self._raw_queue.put_nowait(raw)
+        event = parse_notification(raw)
         if event is not None:
             self._notif_queue.put_nowait(event)
 
@@ -178,6 +196,136 @@ class XBloomClient:
             armed = await self._drain_until_state(STATE_ARMED, self.ack_timeout)
             log.info("recipe loaded — machine armed (awaiting human approval)")
             return armed
+        finally:
+            await self._stop_notify()
+
+    # ------------------------------------------------------------------
+    # Lower-level explicit controls (act on the machine — gated in the CLI)
+    # ------------------------------------------------------------------
+    async def _write_frame(self, frame: bytes) -> None:
+        """Write one command frame to ``ffe1`` (with write-response)."""
+        if self._client is None or not self._client.is_connected:
+            raise XBloomError("not connected")
+        await self._client.write_gatt_char(CHAR_COMMAND, frame, response=True)
+
+    async def _write_frames(self, frames: list[bytes]) -> None:
+        """Write an ordered list of frames, ACK-waiting between each."""
+        await self._start_notify()
+        try:
+            for i, frame in enumerate(frames):
+                cmd = frame[3]
+                log.info("→ frame %d/%d (cmd=0x%02x)", i + 1, len(frames), cmd)
+                await self._write_frame(frame)
+                await self._await_ack(cmd)
+        finally:
+            await self._stop_notify()
+
+    async def get_machine_info(self, timeout: float = 6.0) -> Optional[MachineInfo]:
+        """Query and decode the machine-info blob (serial/firmware/units). Read-only."""
+        if self._client is None or not self._client.is_connected:
+            raise XBloomError("not connected")
+        await self._start_notify()
+        try:
+            await self._write_frame(build_machine_info_query())
+            loop = asyncio.get_event_loop()
+            deadline = loop.time() + timeout
+            while True:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    return None
+                try:
+                    raw = await asyncio.wait_for(self._raw_queue.get(), timeout=remaining)
+                except asyncio.TimeoutError:
+                    return None
+                info = parse_machine_info(raw)
+                # Accept the first reply that carries a serial or firmware string.
+                if info is not None and (info.serial or info.firmware):
+                    return info
+        finally:
+            await self._stop_notify()
+
+    async def read_scale(self, timeout: float = 6.0) -> Optional[float]:
+        """Read the current scale weight in grams (streamed notification). Free/read-only."""
+        if self._client is None or not self._client.is_connected:
+            raise XBloomError("not connected")
+        await self._start_notify()
+        try:
+            loop = asyncio.get_event_loop()
+            deadline = loop.time() + timeout
+            while True:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    return None
+                try:
+                    raw = await asyncio.wait_for(self._raw_queue.get(), timeout=remaining)
+                except asyncio.TimeoutError:
+                    return None
+                grams = parse_scale_weight(raw)
+                if grams is not None:
+                    return grams
+        finally:
+            await self._stop_notify()
+
+    async def tare_scale(self) -> None:
+        """Zero (tare) the scale. Explicit action."""
+        await self._write_frames([build_scale_tare()])
+
+    async def set_scale_units(self, unit: str) -> None:
+        """Set the weight unit (``g``/``oz``/``ml``). Explicit action."""
+        await self._write_frames([build_scale_units(unit)])
+
+    async def grind(self, size: int, speed: int = 90) -> None:
+        """Run the grinder standalone (no brew). Explicit action — grinds the loaded dose."""
+        await self._write_frames([build_grind(size, speed)])
+
+    async def pour(
+        self,
+        ml: int,
+        temp: int,
+        *,
+        flow: float = 3.0,
+        pattern: str = "spiral",
+        agitation: bool = False,
+        rpm: int = 90,
+        dose_g: int = 0,
+        tare: bool = True,
+    ) -> None:
+        """⚠️ FreeSolo single pour — DISPENSES HOT WATER. Explicit action."""
+        frames = build_pour_frames(
+            ml, temp, flow=flow, pattern=pattern, agitation=agitation,
+            rpm=rpm, dose_g=dose_g, tare=tare,
+        )
+        await self._write_frames(frames)
+
+    async def save_slot(self, slot: int, recipe: Recipe, *, scale: bool = True,
+                        grinder: bool = True) -> None:
+        """Write an Easy-Mode preset to slot 1/2/3. Stateful write; no brew."""
+        recipe.validate()
+        frame = build_save_slot(
+            slot, recipe.to_protocol_dict(), scale=scale, grinder=grinder,
+        )
+        await self._write_frames([frame])
+
+    async def start_brew(self, recipe: Recipe) -> StatusEvent:
+        """⚠️ Load AND START a brew — the explicit opt-in path (NOT the default).
+
+        Emits the load frames followed by the brew-start sequence. This WILL
+        start a brew on the machine. The default :meth:`load_recipe` never does.
+        """
+        recipe.validate()
+        frames = build_start_frames(recipe.to_protocol_dict())
+        await self._start_notify()
+        try:
+            for i, frame in enumerate(frames):
+                cmd = frame[3]
+                log.info("→ start frame %d/%d (cmd=0x%02x)", i + 1, len(frames), cmd)
+                await self._write_frame(frame)
+                await self._await_ack(cmd)
+            # Best-effort: surface the first non-heartbeat status seen.
+            try:
+                return await self._drain_until_state(STATE_ARMED, self.ack_timeout)
+            except XBloomError:
+                return StatusEvent(state=None, state_name="started", raw=b"")
         finally:
             await self._stop_notify()
 

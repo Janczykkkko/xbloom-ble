@@ -88,8 +88,13 @@ Rosetta Stone — e.g. a `3.0 ml/s` flow shows up as `0x1e` (30), a `92 °C` as 
 For the xBloom this pinned the **pours frame** (command `0x41`):
 
 ```
-0x41 payload = 01 | LEN | <pour records…> | grind(u8) | tail(u8)
+0x41 payload = 01 | LEN | <pour records…> | grind(u8) | tail(u8 = round(ratio×10))
 ```
+
+The final two bytes are `[grinder_size][ratio×10]`: the **tail is the brew
+ratio** (1:16 → `0xa0` = 160, 1:17 → `0xaa` = 170), reconciled against
+brAzzi64/xbloom-ble's `grandWater` field and cross-checked to reproduce the
+captured tails from each run's `Σml / dose`.
 
 Each pour is an **8-byte record**:
 
@@ -124,9 +129,11 @@ sequence and a **state byte** the machine reports:
   brewing · `0x43` brew-record (live water/coffee weights) · `0x41` complete.
 
 This is the key safety insight behind the library: **loading the recipe is enough to make the
-machine prompt the human.** So the tool only ever sends the load sequence (`a4 → a6 → a8 → 0x41`)
-and **never** `0x42`/`0x46` — the person physically approves on the machine to start. A controller
-*cannot* brew on an empty machine.
+machine prompt the human.** So the **default `brew` command** only ever sends the load sequence
+(`a4 → a6 → a8 → 0x41`) and **never** `0x42`/`0x46`/`0x119A` — the person physically approves on
+the machine to start. The library *also* offers an explicit, opt-in `start` path (a distinct
+`build_start_frames`) for users who deliberately want an unattended brew, but that is never the
+default and is loudly warned.
 
 ---
 

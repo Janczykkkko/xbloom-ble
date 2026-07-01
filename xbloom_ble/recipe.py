@@ -221,12 +221,28 @@ class Recipe:
     def total_water_ml(self) -> int:
         return sum(int(p.ml) for p in self.pours)
 
+    @property
+    def effective_ratio(self) -> float:
+        """The brew ratio to encode in the 0x41 tail byte.
+
+        Uses the explicit ``ratio`` if given, else derives it from
+        ``Σ pour ml / dose_g`` (rounded to one decimal — the wire only carries
+        ``ratio × 10``).
+        """
+        if self.ratio is not None:
+            return float(self.ratio)
+        return round(self.total_water_ml / float(self.dose_g), 1)
+
     def to_protocol_dict(self) -> dict[str, Any]:
-        """Shape consumed by :func:`xbloom_ble.protocol.build_load_frames`."""
+        """Shape consumed by :func:`xbloom_ble.protocol.build_load_frames`.
+
+        Always carries a ``ratio`` (explicit or derived), so the 0x41 tail byte
+        (``round(ratio*10)``) is computed from the recipe rather than a constant.
+        """
         return {
             "dose": int(self.dose_g),
             "grind": int(self.grind),
+            "ratio": self.effective_ratio,
             "stage_temps": tuple(self.stage_temps),
-            "tail": int(self.tail),
             "pours": [p.to_protocol_dict() for p in self.pours],
         }
