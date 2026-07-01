@@ -123,9 +123,9 @@ It validates, connects, **loads** the recipe, then prints:
 ✋ Recipe loaded. Add beans + cup, then APPROVE ON THE MACHINE to start. (This tool will NOT start it.)
 ```
 
-…and streams live status (state changes and, during the brew, water/coffee
-weights) until the brew completes or the timeout (`--timeout`, default 300 s)
-elapses. A telemetry log is written to `./telemetry-<timestamp>.json`.
+…and streams live status (machine state changes) until the brew completes or the
+timeout (`--timeout`, default 300 s) elapses. A telemetry log is written to
+`./telemetry-<timestamp>.json`.
 
 Common flags: `--address`, `--timeout`, `-v/--verbose`, `--version`.
 
@@ -214,7 +214,7 @@ documented in full so you can build on it.
 
 ### Frame format
 
-Every frame (commands to `ffe1`, status from `ffe2`) is:
+**Commands** written to `ffe1` (host → machine) are:
 
 ```
 58 01 01 | CMD(u8) | SEQ(u8) | LEN(u16 LE) | 00 00 | PAYLOAD | CRC16(u16 LE)
@@ -229,6 +229,9 @@ Every frame (commands to `ffe1`, status from `ffe2`) is:
 - `CRC16` — **CRC-16/KERMIT** over the whole frame minus the trailing two bytes,
   stored little-endian.
 
+**Notifications** on `ffe2` (machine → host) use a **different** shape — see
+[Status notifications](#status-notifications-ffe2) below.
+
 **CRC-16/KERMIT:** polynomial `0x1021`, init `0`, reflected input and output, no
 final XOR (check value `0x2189` for `b"123456789"`).
 
@@ -241,6 +244,11 @@ Vendor service `0000e0ff-3c17-d293-8e48-14fe2e4da212`:
 | command        | `ffe1`| write               |
 | status         | `ffe2`| notify (telemetry)  |
 | aux            | `ffe3`| auxiliary           |
+
+> ⚠️ **`ffe1` accepts only a *Write Command* (write-without-response, ATT `0x52`).**
+> A *Write Request* (write-with-response, `0x12`) is rejected by the firmware with
+> GATT "Unlikely Error" — verified against the vendor app, which never uses a Write
+> Request on `ffe1`. Command acknowledgements come back as notifications on `ffe2`.
 
 ### The LOAD sequence
 
@@ -291,21 +299,36 @@ carrying the flow/pause/rpm fields.
 
 ### Status notifications (`ffe2`)
 
-A `0x57` status frame's **state byte** (the byte just after the `0xc1` marker)
-tells you what the machine is doing:
+Notifications use their **own** frame shape (distinct from the command frames
+above):
+
+```
+58 02 07 | TYPE(u8) | SUB(u8) | LEN(u32 LE) | 0xc1 | PAYLOAD | CRC16(u16 LE)
+```
+
+- **`TYPE`** (offset 3) is the frame kind:
+  - a **command echo / ACK** — `TYPE` equals the command byte just written
+    (`a4/a6/a8/41/…`), so an ACK is simply "the notification whose offset-3 byte
+    matches my command" (e.g. `5802 07 a6 …` acks `0xa6`).
+  - **`0x57`** — a **status** frame; the byte right after `0xc1` is the machine
+    *state* (table below).
+  - **`0x15` / `0x4b`** — idle **heartbeats** (ignored).
+  - `0x49` carries a machine-info dump (serial + firmware string); `0x39` etc.
+    carry live brew progress (best-effort, not needed for load-only).
+
+**State byte** (inside a `0x57` frame, right after `0xc1`):
 
 | State | Name               | Meaning                              |
 |-------|--------------------|--------------------------------------|
-| 0x01  | idle               | Idle / ready.                        |
+| 0x01  | idle               | Idle / ready (also at brew end).     |
+| 0x1d  | loading            | Recipe being received.               |
 | 0x1f  | armed              | Recipe loaded, awaiting approval.    |
 | 0x1e  | awaiting_confirm   | Waiting for the human to confirm.    |
 | 0x3b  | brewing            | Brew in progress.                    |
-| 0x43  | brew_record        | Live brew record (water/coffee g).   |
 | 0x41  | complete           | Brew complete.                       |
-| 0x15 / 0x4b | idle_heartbeat | Idle heartbeat (ignored).         |
 
-`0x43` brew-record frames carry live water/coffee weights (16-bit LE tenths of a
-gram), decoded best-effort.
+The load path waits for state **`0x1f` (armed)**, which the machine reports right
+after it ACKs the `0x41` pours frame — that's when it prompts the human to approve.
 
 ---
 

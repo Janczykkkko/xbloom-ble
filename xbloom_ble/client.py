@@ -170,8 +170,12 @@ class XBloomClient:
             for i, frame in enumerate(frames):
                 cmd = frame[3]
                 log.info("→ load frame %d/%d (cmd=0x%02x)", i + 1, len(frames), cmd)
-                # response=True so we get write confirmation from the peripheral.
-                await self._client.write_gatt_char(CHAR_COMMAND, frame, response=True)
+                # The machine's command characteristic (ffe1) accepts ONLY a Write Command
+                # (write-without-response, ATT 0x52) — verified from the vendor app's own HCI
+                # capture, which never uses a Write Request on ffe1. A Write Request (response=True)
+                # is rejected by the firmware with GATT "Unlikely Error". The ACK arrives instead as
+                # a notification on ffe2 (echoing the command byte), which we await below.
+                await self._client.write_gatt_char(CHAR_COMMAND, frame, response=False)
                 # Wait for the echoed ACK of this command on ffe2.
                 await self._await_ack(cmd)
             # The final 0x41 drives the machine to the armed state; confirm it.

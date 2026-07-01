@@ -1,28 +1,38 @@
 """Decode xBloom Studio status notifications (the ``ffe2`` characteristic).
 
-The machine pushes status frames to the ``ffe2`` notify characteristic. They
-use the same outer frame format as commands (``58 .. .. cmd seq len .. payload
-crc``). Status frames carry command ``0x57``; their *state byte* — the byte that
-follows the ``0xc1`` marker inside the payload — tells you what the machine is
-doing.
+The machine pushes status frames to the ``ffe2`` notify characteristic. Unlike
+the *command* frames we send to ``ffe1`` (``58 01 01 | cmd | seq | len16 | 00 00
+| payload | crc``), notifications use a **distinct** frame shape (verified from
+the vendor app's HCI capture — 4658 notifications, all this format)::
 
-State byte meanings
--------------------
+    58 02 07 | TYPE(1) | SUB(1) | LEN(u32le) | 0xc1 | payload | CRC16(u16le)
+
+* ``TYPE`` (offset 3) is the frame kind:
+  - a **command echo / ACK** — ``TYPE`` equals the command byte the app just
+    wrote (``a4/a6/a8/41/42/46``), so an ACK is simply "the notification whose
+    offset-3 byte matches my command".
+  - ``0x57`` — a **status** frame; the byte right after ``0xc1`` is the machine
+    *state* (see table).
+  - ``0x15`` / ``0x4b`` — idle **heartbeats** (ignored).
+  - ``0x49`` — machine-info dump (serial + firmware string), ``0x39`` etc. carry
+    live brew progress (best-effort, not needed for load-only).
+
+State byte (inside a ``0x57`` frame, right after ``0xc1``)
+---------------------------------------------------------
 ====  ============================  =========================================
 Byte  Name                          Meaning
 ====  ============================  =========================================
-0x01  idle                          Idle / ready.
+0x01  idle                          Idle / ready (also seen at brew end).
+0x1d  loading                       Recipe being received.
 0x1f  armed                         Recipe loaded, armed, awaiting approval.
 0x1e  awaiting_confirm              Waiting for the human to confirm on device.
 0x3b  brewing                       Brew in progress.
-0x43  brew_record                   Live brew record (water/coffee weights).
 0x41  complete                      Brew complete.
-0x15  idle_heartbeat                Idle heartbeat (ignored).
-0x4b  idle_heartbeat                Idle heartbeat (ignored).
 ====  ============================  =========================================
 
-``0x43`` brew-record frames additionally carry live weights, decoded
-best-effort (the byte layout is partially reverse-engineered).
+The state ``0x1f`` (armed) is what :meth:`XBloomClient.load_recipe` waits for
+after sending the four LOAD frames — the machine is armed and prompting the
+human. Live brew-weight decoding is best-effort and left ``None`` here.
 """
 
 from __future__ import annotations
@@ -42,22 +52,22 @@ __all__ = [
 
 STATE_NAMES: dict[int, str] = {
     0x01: "idle",
+    0x1D: "loading",
     0x1F: "armed",
     0x1E: "awaiting_confirm",
     0x3B: "brewing",
-    0x43: "brew_record",
     0x41: "complete",
-    0x15: "idle_heartbeat",
-    0x4B: "idle_heartbeat",
 }
 
-# Heartbeats that should be ignored by consumers.
+# Notification TYPE bytes (offset 3) that are idle heartbeats — ignored.
+HEARTBEAT_TYPES = frozenset({0x15, 0x4B})
+# Kept for backward compat (consumers referencing it): heartbeat state sentinels.
 IGNORED_STATES = frozenset({0x15, 0x4B})
 
 # States that mean the brew is over / the machine is idle.
 TERMINAL_STATES = frozenset({0x41, 0x01})
 
-STATUS_CMD = 0x57
+STATUS_CMD = 0x57      # TYPE byte of a status frame (state follows the 0xc1 marker)
 STATE_MARKER = 0xC1
 
 
@@ -90,57 +100,50 @@ class StatusEvent:
         return " ".join(bits)
 
 
-def _decode_weights(payload: bytes, state_idx: int) -> tuple[Optional[float], Optional[float]]:
-    """Best-effort decode of brew-record weights from a 0x43 frame.
+def _marker_idx(data: bytes) -> int:
+    """Offset of the ``0xc1`` payload marker in a ``58 02 07`` notification.
 
-    The brew record stores live weights as 16-bit little-endian values in
-    tenths of a gram, immediately after the state byte. The exact field count
-    varies, so we read defensively and only return values that look sane.
+    The header is fixed width (``58 02 07`` + TYPE + SUB + 4-byte LEN = 9 bytes),
+    so the marker sits at offset 9; fall back to a search for robustness.
     """
-    after = payload[state_idx + 1 :]
-    vals: list[float] = []
-    for i in range(0, len(after) - 1, 2):
-        raw = struct.unpack_from("<H", after, i)[0]
-        grams = raw / 10.0
-        # Plausible brew weights only (filters CRC bytes / markers).
-        if 0.0 <= grams <= 2000.0:
-            vals.append(grams)
-        if len(vals) >= 2:
-            break
-    water = vals[0] if vals else None
-    coffee = vals[1] if len(vals) > 1 else None
-    return water, coffee
+    if len(data) > 9 and data[9] == STATE_MARKER:
+        return 9
+    return data.find(STATE_MARKER, 5)
 
 
 def parse_notification(data: bytes) -> Optional[StatusEvent]:
     """Decode a raw ``ffe2`` notification into a :class:`StatusEvent`.
 
     ``data`` may be ``bytes``, ``bytearray``, or a hex string. Returns ``None``
-    for frames that are not recognisable status frames (so callers can simply
-    skip them).
+    for frames that are not recognisable notifications (so callers can simply
+    skip them). Frame shape: ``58 02 07 | TYPE | SUB | LEN(u32le) | c1 | … | crc``.
     """
     if isinstance(data, str):
         data = bytes.fromhex(data.replace(" ", ""))
     else:
         data = bytes(data)
 
-    if len(data) < 4 or data[0] != 0x58:
+    if len(data) < 10 or data[0] != 0x58:
         return None
 
-    # The state byte follows the 0xc1 marker inside the payload.
-    marker_idx = data.find(STATE_MARKER, 5)
-    if marker_idx < 0 or marker_idx + 1 >= len(data):
-        # Recognised frame but no state marker (e.g. a bare ACK echo).
-        return StatusEvent(state=None, state_name="ack", raw=data)
+    ftype = data[3]  # TYPE byte: command echo/ACK, 0x57 status, or heartbeat.
 
-    state = data[marker_idx + 1]
-    name = STATE_NAMES.get(state, f"unknown_0x{state:02x}")
+    # Idle heartbeats — surface as heartbeat events so consumers skip them.
+    if ftype in HEARTBEAT_TYPES:
+        return StatusEvent(state=ftype, state_name="idle_heartbeat", raw=data)
 
-    water = coffee = None
-    if state == 0x43:
-        water, coffee = _decode_weights(data, marker_idx + 1)
+    marker = _marker_idx(data)
+    payload = data[marker + 1 : -2] if marker >= 0 else b""
 
-    return StatusEvent(state=state, state_name=name, raw=data, water_g=water, coffee_g=coffee)
+    # Status frame: the state code is the first byte after the 0xc1 marker.
+    if ftype == STATUS_CMD and payload:
+        state = payload[0]
+        name = STATE_NAMES.get(state, f"unknown_0x{state:02x}")
+        return StatusEvent(state=state, state_name=name, raw=data)
+
+    # Otherwise it's a command echo / ACK (TYPE == the acked command byte) or a
+    # brew-progress frame. No parsed state; the ACK is identified by data[3].
+    return StatusEvent(state=None, state_name=f"ack_0x{ftype:02x}", raw=data)
 
 
 def is_idle_or_complete(event: StatusEvent) -> bool:
