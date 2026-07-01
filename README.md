@@ -11,8 +11,13 @@ reverse-engineered Bluetooth Low Energy protocol so you can script and version
 your recipes — discover the machine, validate a recipe, **load it onto the
 machine**, and watch live brew telemetry.
 
-It is a small, dependency-light Python package (`bleak` + `pyyaml`) with a clean
-CLI and a fully documented protocol so others can build on it.
+It can also — optionally — **sync recipes to your xBloom phone-app account** over
+the unofficial cloud REST API (`xbloom cloud`, see below), so a recipe you keep
+in version control shows up in the app too.
+
+It is a small, dependency-light Python package (`bleak` + `pyyaml`; the cloud
+feature adds an optional `cryptography` dep) with a clean CLI and a fully
+documented protocol so others can build on it.
 
 > 🤖 **Designed with agentic use in mind.** This was written *by* an AI coding agent
 > ([Claude Code](https://claude.com/claude-code)) and tailored to be driven *by* one —
@@ -381,6 +386,16 @@ build a different front-end:
 ```python
 from xbloom_ble.protocol import build_load_frames
 frames = build_load_frames(recipe.to_protocol_dict())  # [a4, a6, a8, 41]
+```
+
+The cloud client (`pip install "xbloom-ble[cloud]"`) pushes to the app account;
+`sync_recipe` is idempotent and only ever manages `AUTO …` recipes:
+
+```python
+from xbloom_ble.cloud import XBloomCloud
+client = XBloomCloud(email="…", password="…")   # or XBLOOM_EMAIL/XBLOOM_PASSWORD
+client.login()
+client.sync_recipe(recipe)                        # create-or-update "AUTO <name>"
 ```
 
 ---
