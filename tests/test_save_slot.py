@@ -4,7 +4,7 @@ plus the batch-normalisation logic in the client."""
 import pytest
 
 from xbloom_ble.client import XBloomClient, XBloomError
-from xbloom_ble.protocol import build_save_slot
+from xbloom_ble.protocol import build_save_slot, build_set_mode
 
 # The Savora recipe exactly as the vendor app stored it to a slot (rpm on the
 # first pour only; all pours spiral) — the ground truth for the byte-exact check.
@@ -52,6 +52,21 @@ def test_save_slot_rejects_bad_index():
     for bad in (3, -1, "A"):
         with pytest.raises(ValueError):
             build_save_slot(REC, bad)
+
+
+# --- mode switch (byte-exact vs the app's mode-toggle capture) --------------
+def test_set_mode_pro_byte_exact():
+    assert build_set_mode(pro=True).hex() == "580102f72c1000000001000000002a90"
+
+
+def test_set_mode_auto_byte_exact():
+    assert build_set_mode(pro=False).hex() == "580102f72c100000000191327856ff58"
+
+
+def test_set_mode_is_not_a_brew_opcode():
+    for pro in (True, False):
+        fr = build_set_mode(pro=pro)
+        assert fr[3:5] == bytes([0xF7, 0x2C])          # 0x2CF7 mode-switch, never 0x42/0x46
 
 
 # --- batch normalisation (save_slots) --------------------------------------

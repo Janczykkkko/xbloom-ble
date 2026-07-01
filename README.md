@@ -203,8 +203,9 @@ single slot leaves the machine showing **RETRY**.
 > dial, not the app**.
 >
 > 🔌 Before writing, **disconnect the phone** (close the app *and* turn its
-> Bluetooth off) — the machine allows one BLE link at a time, and a slot write to
-> a machine that's still bonded to the phone will fail with RETRY.
+> Bluetooth off) — the machine allows one BLE link at a time. The machine can be
+> on **any screen**: `save-slots` switches it into Pro mode to write and back to
+> Auto after (see the protocol section), so you don't need to set the mode yourself.
 
 ### Push recipes to your app account (cloud)
 
@@ -430,6 +431,14 @@ Writing a single slot (or adding a trailing "commit") leaves the machine hung at
 batch. Like every other write here, `0x2CF6` is a preset write and **never starts
 a brew**.
 
+**Pro vs Auto mode (`0x2CF7`).** The machine only accepts slot writes in **Pro
+mode** (status `0x01`, idle). In **Auto mode** — the on-machine A/B/C recipe
+selector — it parks at status `0x41` and rejects the writes (RETRY). The mode is
+set with command **`0x2CF7`**: `58 01 02 | f7 2c | LEN | 01 | <4 bytes> | CRC`,
+where `00 00 00 00` = Pro and `91 32 78 56` = Auto. `save_slots` therefore sends
+**Pro** before the batch and **Auto** after (so the fresh presets are ready to
+pick on the dial). This too is only a mode switch — it never brews.
+
 > The machine exposes **no way to read the current slots back** — the vendor app
 > doesn't read them either; it just re-pushes whatever it last stored. Keep your
 > recipes and re-run the batch to restore them.
@@ -462,7 +471,7 @@ above):
 | 0x1f  | armed              | Recipe loaded, awaiting approval.    |
 | 0x1e  | awaiting_confirm   | Waiting for the human to confirm.    |
 | 0x3b  | brewing            | Brew in progress.                    |
-| 0x41  | complete           | Brew complete.                       |
+| 0x41  | complete           | Brew complete; also = Auto-mode selector. |
 | 0x43  | saving_slots       | Auto-Mode slot batch being stored.   |
 | 0x25  | slots_saved        | Auto-Mode slots stored OK (→ idle).  |
 
