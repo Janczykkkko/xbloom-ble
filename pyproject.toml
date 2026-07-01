@@ -37,6 +37,7 @@ Repository = "https://github.com/Janczykkkko/xbloom-ble"
 [project.scripts]
 xbloom = "xbloom_ble.cli:main"
 
+
 [tool.setuptools.packages.find]
 include = ["xbloom_ble*"]
 
