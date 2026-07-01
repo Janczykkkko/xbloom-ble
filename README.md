@@ -3,8 +3,8 @@
 > 🤖 Built & maintained by [Claude Code](https://claude.com/claude-code).
 
 [![CI](https://github.com/Janczykkkko/xbloom-ble/actions/workflows/ci.yml/badge.svg)](https://github.com/Janczykkkko/xbloom-ble/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/xbloom-ble)](https://pypi.org/project/xbloom-ble/)
-[![Python](https://img.shields.io/pypi/pyversions/xbloom-ble)](https://pypi.org/project/xbloom-ble/)
+[![PyPI](https://img.shields.io/pypi/v/xbloom-ble?cacheSeconds=3600)](https://pypi.org/project/xbloom-ble/)
+[![Python](https://img.shields.io/pypi/pyversions/xbloom-ble?cacheSeconds=3600)](https://pypi.org/project/xbloom-ble/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 ![Built with Claude Code](https://img.shields.io/badge/built%20with-Claude%20Code-d97757)
 
