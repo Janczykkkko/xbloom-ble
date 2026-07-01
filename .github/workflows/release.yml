@@ -47,7 +47,7 @@ jobs:
 
       - name: Python Semantic Release
         id: release
-        uses: python-semantic-release/python-semantic-release@v9
+        uses: python-semantic-release/python-semantic-release@v10
         with:
           github_token: ${{ secrets.RELEASE_PAT || secrets.GITHUB_TOKEN }}
 
@@ -57,6 +57,6 @@ jobs:
 
       - name: Attach distributions to the GitHub Release
         if: steps.release.outputs.released == 'true'
-        uses: python-semantic-release/publish-action@v9
+        uses: python-semantic-release/publish-action@v10
         with:
           github_token: ${{ secrets.RELEASE_PAT || secrets.GITHUB_TOKEN }}
