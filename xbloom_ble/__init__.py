@@ -11,9 +11,9 @@ opcodes, so it can never auto-start a brew. See ``protocol.py``.
 
 __version__ = "0.1.0"
 
-from .protocol import build_load_frames, PATTERN_CODES, crc16_kermit, xbloom_frame
-from .recipe import Recipe, Pour, RecipeError
-from .telemetry import StatusEvent, parse_notification, STATE_NAMES
+from .protocol import PATTERN_CODES, build_load_frames, crc16_kermit, xbloom_frame
+from .recipe import Pour, Recipe, RecipeError
+from .telemetry import STATE_NAMES, StatusEvent, parse_notification
 
 __all__ = [
     "__version__",

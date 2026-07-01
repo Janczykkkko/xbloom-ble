@@ -46,9 +46,10 @@ def test_is_managed():
 def test_spiral_maps_to_pattern_2():
     # Verified against real app-made recipes: spiral/ring pours encode as cloud
     # pattern code 2 (an earlier port wrongly used 3).
+    import json as _json
+
     from xbloom_ble.cloud import recipe_to_cloud
     from xbloom_ble.recipe import Recipe
-    import json as _json
 
     rec = Recipe.from_dict({
         "name": "T", "dose_g": 16, "grind": 60,
@@ -63,9 +64,10 @@ def test_spiral_maps_to_pattern_2():
 def test_agitation_maps_to_vibration_after():
     # A pour's agitation ("agitate after this pour", e.g. after-bloom) must encode
     # as isEnableVibrationAfter=1, NOT ...Before (which was a bug).
+    import json as _json
+
     from xbloom_ble.cloud import recipe_to_cloud
     from xbloom_ble.recipe import Recipe
-    import json as _json
 
     rec = Recipe.from_dict({
         "name": "T", "dose_g": 16, "grind": 60,

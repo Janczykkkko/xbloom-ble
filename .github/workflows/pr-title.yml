@@ -1,0 +1,35 @@
+name: PR Title
+
+# Every PR title must be a valid Conventional Commit (feat:, fix:, docs:, …),
+# because merges are squashed and the PR title becomes the commit that drives
+# semantic-release. See CONTRIBUTING.md.
+
+on:
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  pull-requests: read
+
+jobs:
+  semantic-title:
+    name: Validate title (Conventional Commits)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # Allowed types (Conventional Commits). feat/fix drive releases.
+          types: |
+            feat
+            fix
+            docs
+            style
+            refactor
+            perf
+            test
+            build
+            ci
+            chore
+            revert

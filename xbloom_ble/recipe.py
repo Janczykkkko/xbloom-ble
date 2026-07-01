@@ -23,7 +23,7 @@ with ``spiral``) for an agitated bloom.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -79,7 +79,7 @@ class Recipe:
     # Construction
     # ------------------------------------------------------------------
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "Recipe":
+    def from_dict(cls, data: dict[str, Any]) -> Recipe:
         if not isinstance(data, dict):
             raise RecipeError("recipe must be a mapping")
         try:
@@ -129,7 +129,7 @@ class Recipe:
         return recipe
 
     @classmethod
-    def from_yaml(cls, path: str | Path) -> "Recipe":
+    def from_yaml(cls, path: str | Path) -> Recipe:
         """Load and validate a recipe from a YAML file."""
         text = Path(path).read_text(encoding="utf-8")
         data = yaml.safe_load(text)
@@ -156,7 +156,7 @@ class Recipe:
         # stage temps (machine preheat/stage set-points; default 110/90). These
         # are NOT the pour temperature and legitimately exceed the 95 °C pour cap,
         # so they keep the wider 40–130 °C allowance.
-        for label, t in zip(("stage temp1", "stage temp2"), self.stage_temps):
+        for label, t in zip(("stage temp1", "stage temp2"), self.stage_temps, strict=False):
             if not (40 <= float(t) <= 130):
                 errors.append(f"{label} {t}°C out of range (40–130°C)")
 

@@ -5,6 +5,19 @@ community, MIT-licensed effort to make the [xBloom Studio](https://xbloom.com)
 scriptable over Bluetooth LE. Whether you're fixing a bug, decoding more of the
 protocol, or wiring it into your smart home, you're in the right place.
 
+## Workflow (PRs + Conventional Commits)
+
+- `main` is protected — land changes via a **pull request**; CI (`ruff` + `pytest` on
+  Python 3.10–3.13) must pass.
+- **Your PR title must be a [Conventional Commit](https://www.conventionalcommits.org/)** —
+  it's validated in CI and, on squash-merge, becomes the commit that drives the release.
+  Types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`,
+  `revert`. Examples: `feat: add scale-tare command`, `fix: correct pour pattern mapping`.
+  Breaking change → `feat!:` or a `BREAKING CHANGE:` footer.
+- Releases are **fully automated** (`feat` → minor, `fix` → patch, breaking → major) and
+  published to PyPI — you never bump the version or tag by hand. See
+  [docs/RELEASING.md](docs/RELEASING.md).
+
 ## Dev setup
 
 You'll need Python 3.10+ and, for any on-hardware work, a machine with a working

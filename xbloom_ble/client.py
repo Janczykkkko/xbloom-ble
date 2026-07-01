@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Awaitable, Callable, Optional
+from collections.abc import Awaitable, Callable
 
 from .protocol import build_load_frames
 from .recipe import Recipe
@@ -78,7 +78,7 @@ class XBloomClient:
         self.address = address
         self.ack_timeout = ack_timeout
         self._client = None
-        self._notif_queue: "asyncio.Queue[StatusEvent]" = asyncio.Queue()
+        self._notif_queue: asyncio.Queue[StatusEvent] = asyncio.Queue()
 
     # ------------------------------------------------------------------
     # Connection
@@ -99,7 +99,7 @@ class XBloomClient:
             log.info("disconnected")
         self._client = None
 
-    async def __aenter__(self) -> "XBloomClient":
+    async def __aenter__(self) -> XBloomClient:
         await self.connect()
         return self
 
@@ -215,7 +215,7 @@ class XBloomClient:
     # ------------------------------------------------------------------
     async def stream_telemetry(
         self,
-        on_event: Callable[[StatusEvent], Optional[Awaitable[None]]],
+        on_event: Callable[[StatusEvent], Awaitable[None] | None],
         duration: float = 300.0,
         *,
         stop_on_terminal: bool = True,

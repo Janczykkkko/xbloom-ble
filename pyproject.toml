@@ -49,3 +49,24 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# Test data (captured hex frames, tabular assertions) is naturally wide.
+"tests/*" = ["E501"]
+
+[tool.semantic_release]
+# Version lives in both places; keep them in lockstep on release.
+version_toml = ["pyproject.toml:project.version"]
+version_variables = ["xbloom_ble/__init__.py:__version__"]
+build_command = "python -m pip install build && python -m build"
+commit_message = "chore(release): v{version} [skip ci]"
+tag_format = "v{version}"
+# Conventional Commits: feat -> minor, fix/perf -> patch, BREAKING CHANGE -> major.
+commit_parser = "conventional"
+allow_zero_version = true
+
+[tool.semantic_release.branches.main]
+match = "main"
+
+[tool.semantic_release.changelog]
+exclude_commit_patterns = ['''^chore\(release\):''']

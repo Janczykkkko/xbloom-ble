@@ -37,9 +37,7 @@ human. Live brew-weight decoding is best-effort and left ``None`` here.
 
 from __future__ import annotations
 
-import struct
 from dataclasses import dataclass
-from typing import Optional
 
 __all__ = [
     "STATE_NAMES",
@@ -75,13 +73,13 @@ STATE_MARKER = 0xC1
 class StatusEvent:
     """A decoded status notification."""
 
-    state: Optional[int]
+    state: int | None
     state_name: str
     raw: bytes
     #: Live water weight in grams (brew-record frames only), best-effort.
-    water_g: Optional[float] = None
+    water_g: float | None = None
     #: Live coffee/extracted weight in grams (brew-record frames only).
-    coffee_g: Optional[float] = None
+    coffee_g: float | None = None
 
     @property
     def is_heartbeat(self) -> bool:
@@ -111,7 +109,7 @@ def _marker_idx(data: bytes) -> int:
     return data.find(STATE_MARKER, 5)
 
 
-def parse_notification(data: bytes) -> Optional[StatusEvent]:
+def parse_notification(data: bytes) -> StatusEvent | None:
     """Decode a raw ``ffe2`` notification into a :class:`StatusEvent`.
 
     ``data`` may be ``bytes``, ``bytearray``, or a hex string. Returns ``None``

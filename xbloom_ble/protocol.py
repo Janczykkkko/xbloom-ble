@@ -59,7 +59,7 @@ emits ``0x42`` or ``0x46``.
 from __future__ import annotations
 
 import struct
-from typing import Iterable, Mapping
+from collections.abc import Iterable, Mapping
 
 __all__ = [
     "PATTERN_CODES",
@@ -102,14 +102,14 @@ def crc16_kermit(data: bytes) -> int:
     """
     crc = 0
     for byte in data:
-        byte = int("{:08b}".format(byte)[::-1], 2)
+        byte = int(f"{byte:08b}"[::-1], 2)
         crc ^= byte << 8
         for _ in range(8):
             if crc & 0x8000:
                 crc = ((crc << 1) ^ 0x1021) & 0xFFFF
             else:
                 crc = (crc << 1) & 0xFFFF
-    return int("{:016b}".format(crc)[::-1], 2)
+    return int(f"{crc:016b}"[::-1], 2)
 
 
 def xbloom_frame(cmd: int, seq: int, payload: bytes) -> bytes:

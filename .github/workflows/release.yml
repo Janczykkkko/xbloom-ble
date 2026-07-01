@@ -1,0 +1,61 @@
+name: Release
+
+# On every push to main, python-semantic-release inspects the Conventional-Commit
+# history since the last tag and, if a release is warranted, bumps the version,
+# updates the changelog, tags, and creates a GitHub Release with notes — then the
+# built distributions are published to PyPI via Trusted Publishing (OIDC, no token).
+#
+# Setup required once (see docs/RELEASING.md):
+#   * PyPI Trusted Publisher for this repo + workflow + the `pypi` environment.
+#   * (If `main` requires PRs) a `RELEASE_PAT` secret so the release commit/tag can
+#     be pushed; falls back to GITHUB_TOKEN otherwise.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Semantic Release
+    runs-on: ubuntu-latest
+    # Enable once the PyPI Trusted Publisher is configured: set repo variable
+    # RELEASE_ENABLED=true (Settings → Secrets and variables → Actions → Variables).
+    if: github.repository == 'Janczykkkko/xbloom-ble' && vars.RELEASE_ENABLED == 'true'
+    permissions:
+      contents: write      # push the version bump commit + tag, create the Release
+      id-token: write      # PyPI Trusted Publishing (OIDC)
+    environment:
+      name: pypi
+      url: https://pypi.org/p/xbloom-ble
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_PAT || secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Python Semantic Release
+        id: release
+        uses: python-semantic-release/python-semantic-release@v9
+        with:
+          github_token: ${{ secrets.RELEASE_PAT || secrets.GITHUB_TOKEN }}
+
+      - name: Publish to PyPI
+        if: steps.release.outputs.released == 'true'
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+      - name: Attach distributions to the GitHub Release
+        if: steps.release.outputs.released == 'true'
+        uses: python-semantic-release/publish-action@v9
+        with:
+          github_token: ${{ secrets.RELEASE_PAT || secrets.GITHUB_TOKEN }}

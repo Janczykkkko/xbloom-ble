@@ -194,7 +194,7 @@ def encrypt_form(form: dict[str, Any]) -> str:
 # Recipe → cloud-schema mapper
 # ---------------------------------------------------------------------------
 
-def _pour_to_cloud(pour: "Pour", index: int) -> dict[str, Any]:
+def _pour_to_cloud(pour: Pour, index: int) -> dict[str, Any]:
     """Map one :class:`~xbloom_ble.recipe.Pour` to the cloud pour schema.
 
     * ``pattern`` → 1/2 (center/circular; this package's spiral & ring → 2).
@@ -221,7 +221,7 @@ def _pour_to_cloud(pour: "Pour", index: int) -> dict[str, Any]:
 
 
 def recipe_to_cloud(
-    recipe: "Recipe",
+    recipe: Recipe,
     *,
     cup_type: str | int = "xdripper",
     adapted_model: int = 1,
@@ -434,7 +434,7 @@ class XBloomCloud:
         self._save_cached_auth()
         return resp
 
-    def add_recipe(self, recipe: "Recipe | dict[str, Any]", **map_kwargs: Any) -> dict[str, Any]:
+    def add_recipe(self, recipe: Recipe | dict[str, Any], **map_kwargs: Any) -> dict[str, Any]:
         """Create a recipe in the account. ``recipe`` is either a
         :class:`~xbloom_ble.recipe.Recipe` (mapped via :func:`recipe_to_cloud`,
         passing ``map_kwargs`` through) or an already-mapped cloud dict.
@@ -451,7 +451,7 @@ class XBloomCloud:
     def update_recipe(
         self,
         table_id: int | str,
-        recipe: "Recipe | dict[str, Any]",
+        recipe: Recipe | dict[str, Any],
         *,
         require_managed: bool = True,
         **map_kwargs: Any,
@@ -515,7 +515,7 @@ class XBloomCloud:
 
     def sync_recipe(
         self,
-        recipe: "Recipe | dict[str, Any]",
+        recipe: Recipe | dict[str, Any],
         *,
         prefix: str = MANAGED_PREFIX,
         **map_kwargs: Any,
@@ -543,7 +543,7 @@ class XBloomCloud:
             return resp, "updated"
         return self.add_recipe(cloud), "added"
 
-    def prune_managed(self, keep_names: "list[str] | set[str]") -> list[str]:
+    def prune_managed(self, keep_names: list[str] | set[str]) -> list[str]:
         """Delete tool-owned recipes whose name is not in ``keep_names``.
 
         ``keep_names`` may be given with or without the ``AUTO `` prefix. Only
@@ -583,7 +583,7 @@ class XBloomCloud:
     # -- helpers ------------------------------------------------------------
     @staticmethod
     def _as_cloud_dict(
-        recipe: "Recipe | dict[str, Any]", map_kwargs: dict[str, Any]
+        recipe: Recipe | dict[str, Any], map_kwargs: dict[str, Any]
     ) -> dict[str, Any]:
         if isinstance(recipe, dict):
             return recipe

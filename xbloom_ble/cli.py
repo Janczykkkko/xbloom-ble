@@ -290,7 +290,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     s_cloud.add_argument(
         "--auth-path",
-        help="token cache path (default ~/.config/xbloom-ble/cloud-auth.json or $XBLOOM_CLOUD_AUTH)",
+        help="token cache path (default under ~/.config/xbloom-ble/ or $XBLOOM_CLOUD_AUTH)",
     )
     cloud_sub = s_cloud.add_subparsers(dest="cloud_action", required=True)
 
