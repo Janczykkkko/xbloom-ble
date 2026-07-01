@@ -8,6 +8,25 @@ Conventional-Commit history — new versions are inserted below.
 
 <!-- version list -->
 
+## v1.0.0 (2026-07-01)
+
+### Documentation
+
+- Cache-bust the PyPI badges ([#5](https://github.com/Janczykkkko/xbloom-ble/pull/5),
+  [`801639c`](https://github.com/Janczykkkko/xbloom-ble/commit/801639cdd17795dc2622e5c2ac1b30743a9d0961))
+
+### Features
+
+- Batch-program Auto-Mode dial presets (save-slots)
+  ([#6](https://github.com/Janczykkkko/xbloom-ble/pull/6),
+  [`b282051`](https://github.com/Janczykkkko/xbloom-ble/commit/b28205121c085178403dddd18db22fcecabf472e))
+
+### Breaking Changes
+
+- `save_slot()` / `xbloom save-slot` are replaced by `save_slots()` / `xbloom save-slots` (all three
+  slots required).
+
+
 ## v0.2.0 (2026-07-01)
 
 ### Chores
