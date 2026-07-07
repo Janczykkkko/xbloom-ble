@@ -161,6 +161,12 @@ class XBloomClient:
         and returns the ``StatusEvent`` once the machine reaches STATE ``0x1f``
         (armed / loaded). **This never starts a brew** — the human approves on
         the machine.
+
+        ⚠️ **Known issue (#10): this currently does NOT reliably arm the machine** —
+        the arm below times out (the machine connects but never reaches ``0x1f``).
+        Forcing PRO mode does not fix it; the app uses a different pours opcode
+        (``0x44``) to stage a brew, so the ``0x41`` load sequence appears not to arm.
+        **Slot presets (:meth:`save_slots`) work** — use them meanwhile.
         """
         if self._client is None or not self._client.is_connected:
             raise XBloomError("not connected")

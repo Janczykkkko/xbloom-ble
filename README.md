@@ -147,6 +147,13 @@ OK: 'Example Washed' — 16 g, grind 62, 3 pours, 240 ml total water
 
 ### Load a recipe and watch the brew
 
+> ⚠️ **Known issue ([#10](https://github.com/Janczykkkko/xbloom-ble/issues/10)): staging a
+> recipe (`xbloom brew` / `load_recipe`) does not reliably arm the machine** — it connects but
+> the arm times out (`timed out waiting for state 0x1f`). Forcing PRO mode does not fix it; the
+> vendor app uses a different pours opcode (`0x44`) to stage a brew, so the `0x41` load sequence
+> appears not to arm. **The dial presets (`xbloom save-slots`, below) work reliably — use those
+> meanwhile.** Cloud sync and slot programming are unaffected.
+
 ```bash
 xbloom brew recipes/example-washed.yaml --address AA:BB:CC:DD:EE:FF
 ```
