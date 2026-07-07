@@ -21,6 +21,8 @@ import pytest
 from xbloom_ble.protocol import (
     FORBIDDEN_COMMIT_OPCODE,
     FORBIDDEN_START_OPCODE,
+    NO_GRIND_WIRE,
+    build_41,
     build_load_frames,
     crc16_kermit,
     xbloom_frame,
@@ -115,6 +117,16 @@ def test_load_frames_opcode_order():
     """The four frames are exactly a4, a6, a8, 41 in order."""
     frames = build_load_frames(RECIPES["simple"])
     assert [f[3] for f in frames] == [0xA4, 0xA6, 0xA8, 0x41]
+
+
+def test_grind_byte_passthrough_and_no_grind_sentinel():
+    """The 0x41 grind byte (2nd-to-last, before the tail) is the grind — except
+    grind 0 (no-grind / pre-ground) is emitted as the 0xFE sentinel, not 0x00."""
+    pours = RECIPES["simple"]["pours"]
+    assert build_41(pours, grind=62)[-2] == 62          # normal grind passes through
+    assert build_41(pours, grind=0)[-2] == NO_GRIND_WIRE == 0xFE   # no-grind → 0xFE
+    # the tail byte is unaffected
+    assert build_41(pours, grind=0)[-1] == 0xA0
 
 
 def test_crc16_kermit_known_vector():

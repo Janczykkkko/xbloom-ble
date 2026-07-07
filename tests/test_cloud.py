@@ -61,6 +61,24 @@ def test_spiral_maps_to_pattern_2():
     assert patterns == [2, 2]
 
 
+def test_no_grind_sets_grinder_off_in_cloud():
+    # A no-grind recipe (grind 0, pre-ground) must map to isSetGrinderSize=2 (off);
+    # a normal recipe stays isSetGrinderSize=1 (on). (1=on, 2=off.)
+    from xbloom_ble.cloud import recipe_to_cloud
+    from xbloom_ble.recipe import Recipe
+
+    pours = [{"ml": 40, "temp_c": 92, "pattern": "spiral", "rpm": 120},
+             {"ml": 200, "temp_c": 92, "pattern": "spiral", "rpm": 120}]
+    off = recipe_to_cloud(Recipe.from_dict({"name": "T", "dose_g": 16, "grind": 0, "pours": pours}),
+                          cup_type="xdripper")
+    on = recipe_to_cloud(Recipe.from_dict({"name": "T", "dose_g": 16, "grind": 60, "pours": pours}),
+                         cup_type="xdripper")
+    assert off["isSetGrinderSize"] == 2       # grinder off
+    assert "grinderSize" not in off           # OMITTED (not 0) — else the app shows a literal "0"
+    assert on["isSetGrinderSize"] == 1        # grinder on
+    assert on["grinderSize"] == 60.0          # normal recipe still carries the grind size
+
+
 def test_agitation_maps_to_vibration_after():
     # A pour's agitation ("agitate after this pour", e.g. after-bloom) must encode
     # as isEnableVibrationAfter=1, NOT ...Before (which was a bug).

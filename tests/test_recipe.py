@@ -93,10 +93,21 @@ def test_grind_above_range_raises():
         Recipe.from_dict(_with(grind=81))
 
 
-def test_grind_zero_raises():
-    # grind range is 1–80; 0 must be rejected.
+def test_grind_zero_is_no_grind():
+    # grind 0 is the special "no-grind" value (brew pre-ground): valid, and flagged.
+    r = Recipe.from_dict(_with(grind=0))
+    assert r.grind == 0
+    assert r.no_grind is True
+
+
+def test_normal_grind_is_not_no_grind():
+    assert Recipe.from_dict(VALID).no_grind is False
+
+
+def test_grind_negative_still_raises():
+    # only 0 is special; other out-of-range values (e.g. -1, 81) still fail.
     with pytest.raises(RecipeError, match="grind"):
-        Recipe.from_dict(_with(grind=0))
+        Recipe.from_dict(_with(grind=-1))
 
 
 def test_dose_out_of_range_raises():

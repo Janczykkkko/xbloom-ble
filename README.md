@@ -147,6 +147,13 @@ OK: 'Example Washed' — 16 g, grind 62, 3 pours, 240 ml total water
 
 ### Load a recipe and watch the brew
 
+> ⚠️ **Known issue ([#10](https://github.com/Janczykkkko/xbloom-ble/issues/10)): staging a
+> recipe (`xbloom brew` / `load_recipe`) does not reliably arm the machine** — it connects but
+> the arm times out (`timed out waiting for state 0x1f`). Forcing PRO mode does not fix it; the
+> vendor app uses a different pours opcode (`0x44`) to stage a brew, so the `0x41` load sequence
+> appears not to arm. **The dial presets (`xbloom save-slots`, below) work reliably — use those
+> meanwhile.** Cloud sync and slot programming are unaffected.
+
 ```bash
 xbloom brew recipes/example-washed.yaml --address AA:BB:CC:DD:EE:FF
 ```
@@ -244,7 +251,7 @@ Recipes are plain YAML:
 ```yaml
 name: Example Washed
 dose_g: 16          # coffee dose in grams
-grind: 62           # grinder setting (1–80)
+grind: 62           # grinder setting (1–80); or 0 = no-grind (brew pre-ground, grinder off)
 ratio: 15           # optional; if given, Σ pour ml must equal dose_g * ratio
 stage_temps: [110.0, 90.0]   # optional; machine stage temps, default 110/90
 pours:
@@ -289,7 +296,7 @@ track real hardware.**
 | Value         | Accepted range | Firmness |
 |---------------|----------------|----------|
 | `dose_g`      | 1–18 g         | **Firm (per xBloom Studio specs).** 18 g is the maximum the xBloom app lets you set. |
-| `grind`       | 1–80           | **Firm (per xBloom Studio specs).** The grinder has 80 micro-steps (~18.75 µm each); a *lower* number is *finer*. |
+| `grind`       | 1–80, or 0     | **Firm (per xBloom Studio specs).** The grinder has 80 micro-steps (~18.75 µm each); a *lower* number is *finer*. **`0` = no-grind** (brew pre-ground, grinder off) — *observed*, see note below. |
 | `temp_c` (pour) | 40–95 °C     | **Firm (per xBloom Studio specs).** Settable in 1 °C steps. The app also offers special non-numeric `RT` (room temp) and `BP` (boiling point) settings, outside this numeric range. |
 | `stage_temps` | 40–130 °C each | Machine **preheat/stage set-points** (default 110/90 °C) — NOT the pour temperature, so they legitimately exceed the 95 °C pour cap. Wider allowance around the default. |
 | `rpm`         | 0, or 60–120   | **Firm (per xBloom Studio specs).** 60–120 in 10-RPM steps; `0` (no agitation) is allowed only for `center` pours. |
@@ -299,6 +306,25 @@ track real hardware.**
 | `pattern`     | `spiral`, `ring`, `center` | **Firm.** These are the decoded pattern codes; `agitation: true` is only valid with `spiral`. |
 
 > **Source:** xBloom Studio published specifications.
+
+#### No-grind (brew pre-ground)
+
+Set **`grind: 0`** to brew **pre-ground** coffee — the machine's grinder toggle is
+turned **off** and the grind step is skipped (put your ground coffee straight in the
+dripper). This is *not* "grind at setting 0": a real `0` grinds at the finest setting.
+
+On the wire it maps to a sentinel, not `0`:
+
+- **BLE** — the `0x41` grind byte is sent as **`0xFE`** (the machine reads this as
+  "skip the grinder" and leaves its stored grind size untouched).
+- **Cloud** — the `grinderSize` field is **omitted** and `isSetGrinderSize` is set to
+  off (matching an app-made no-grind recipe; sending `grinderSize: 0` makes the app
+  show a literal "0").
+
+> ⚠️ **Observed, not spec.** The `0xFE` sentinel was recovered from an HCI capture of
+> the app's grinder-off save (see [`docs/REVERSE-ENGINEERING.md`](docs/REVERSE-ENGINEERING.md)),
+> and the cloud behaviour is verified against an app-made recipe. The BLE side has not
+> yet been re-confirmed by driving a machine from this library.
 
 The pour count must be **≥2** (at least a bloom and a first pour), and if you give
 an optional `ratio`, Σ(pour ml) must equal `dose_g * ratio`.
@@ -373,6 +399,9 @@ opcodes would force-start the brew — **this package never sends them.**
 ```
 01 | LEN(u8 = #body bytes) | <pour segments…> | grind(u8) | tail(u8 = 0xa0)
 ```
+
+`grind` is the grinder setting `1–80`, **or `0xFE`** for a **no-grind** recipe (brew
+pre-ground; recipe `grind: 0` → wire `0xFE`) — see *No-grind* above.
 
 Each pour becomes an **8-byte segment**:
 
