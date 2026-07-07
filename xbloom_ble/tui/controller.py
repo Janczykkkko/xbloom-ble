@@ -135,7 +135,14 @@ class FakeController(MachineController):
             return
         dose = float(r.dose_g)
         step = 0.2
-        yield _ev(0x1F, "armed", water=0.0, coffee=dose)
+        # Beverage weight in the cup = water poured minus what the grounds retain
+        # (~2 g per g of coffee), so `coffee` lags `water` through the bloom and then
+        # climbs alongside it — instead of the old flat line.
+        retain = 2.0 * dose
+        def bev(w: float) -> float:
+            return round(max(0.0, w - retain), 1)
+
+        yield _ev(0x1F, "armed", water=0.0, coffee=0.0)
         # Wait for an explicit start() (the app-style Brew), or fall back to
         # auto_start so telemetry-only callers still see a brew begin.
         try:
@@ -143,7 +150,7 @@ class FakeController(MachineController):
         except asyncio.TimeoutError:
             pass
         if self._cancelled:
-            yield _ev(0x01, "cancelled", water=0.0, coffee=dose)
+            yield _ev(0x01, "cancelled", water=0.0, coffee=0.0)
             return
         water = 0.0
         for p in r.pours:
@@ -151,19 +158,20 @@ class FakeController(MachineController):
             n = max(1, int(dur / step))
             for k in range(1, n + 1):
                 if self._cancelled:
-                    yield _ev(0x01, "cancelled", water=round(water, 1), coffee=dose)
+                    yield _ev(0x01, "cancelled", water=round(water, 1), coffee=bev(water))
                     return
                 await asyncio.sleep(step * self.speed)
-                yield _ev(0x1E, "brewing", water=round(water + int(p.ml) * k / n, 1), coffee=dose)
+                w = round(water + int(p.ml) * k / n, 1)
+                yield _ev(0x1E, "brewing", water=w, coffee=bev(w))
             water += int(p.ml)
             # a compressed pause between pours (so the graph shows the plateau)
             for _ in range(min(int(p.pause_s), 8)):
                 if self._cancelled:
-                    yield _ev(0x01, "cancelled", water=round(water, 1), coffee=dose)
+                    yield _ev(0x01, "cancelled", water=round(water, 1), coffee=bev(water))
                     return
                 await asyncio.sleep(step * self.speed)
-                yield _ev(0x1E, "brewing", water=round(water, 1), coffee=dose)
-        yield _ev(0x41, "complete", water=round(water, 1), coffee=dose)
+                yield _ev(0x1E, "brewing", water=round(water, 1), coffee=bev(water))
+        yield _ev(0x41, "complete", water=round(water, 1), coffee=bev(water))
 
 
 class RealController(MachineController):
