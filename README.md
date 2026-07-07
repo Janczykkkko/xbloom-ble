@@ -13,7 +13,13 @@
 There is no official xBloom API. This package speaks the machine's
 reverse-engineered Bluetooth Low Energy protocol so you can script and version
 your recipes — discover the machine, validate a recipe, **load it onto the
-machine**, and watch live brew telemetry.
+machine** (and optionally **start the brew**), and watch live telemetry. It ships
+with a **keyboard-first terminal UI** to do all of that interactively.
+
+<p align="center">
+  <img src="docs/img/tui-walkthrough.gif" alt="xbloom-ble terminal UI walkthrough — browse recipes, brew with a live graph, edit, history" width="720">
+  <br><em>The terminal UI: browse recipes with a live detail view, brew behind a confirm gate with a live graph, edit recipes, and review past brews.</em>
+</p>
 
 It can also — optionally — **sync recipes to your xBloom phone-app account** over
 the unofficial cloud REST API (`xbloom cloud`, see below), so a recipe you keep
@@ -218,6 +224,12 @@ xbloom tui --recipes ./recipes            # or just: xbloom
 - **History** tab — past brews with their saved telemetry curve.
 
 Run it against the simulator (no machine) with `--demo` to explore it safely.
+
+| Recipes + detail sidebar | Live brew graph |
+|---|---|
+| ![Recipes tab](docs/img/tui-recipes.png) | ![Brewing tab](docs/img/tui-brewing.png) |
+| **Validated editor** | **Brew history + telemetry** |
+| ![Editor](docs/img/tui-editor.png) | ![History tab](docs/img/tui-history.png) |
 
 ### Program the dial presets (save-slots)
 

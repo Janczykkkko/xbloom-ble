@@ -1,12 +1,15 @@
-# Example recipe: a generic iced / flash-brew pour-over.
-# Brews a smaller, more concentrated volume of hot water straight onto ice in
-# the cup (add ~80 g of ice yourself). No `ratio` given, so the total is free.
+# Example recipe: a generic iced / flash-brew pour-over. Brews a smaller, more
+# concentrated volume of hot water straight onto ice in the cup.
 name: Example Iced
 dose_g: 18
 grind: 58
 stage_temps: [110.0, 92.0]
+kind: custom
+dripper: Omni
+hot_water_ml: 180
+ice_g: 80
+time: "~1:45"
+note: Flash brew — pour the hot water over ~80 g of ice in the cup.
 pours:
-  # Bloom.
-  - {ml: 50,  temp_c: 94, pattern: spiral, agitation: true, pause_s: 35, rpm: 110, flow_ml_s: 3.0}
-  # Single concentrated main pour onto ice.
-  - {ml: 130, temp_c: 92, pattern: spiral, pause_s: 5, rpm: 100, flow_ml_s: 3.0}
+  - {label: Bloom,  ml: 50,  temp_c: 94, pattern: spiral, agitation: true, pause_s: 35, rpm: 110, flow_ml_s: 3.0}
+  - {label: Pour 1, ml: 130, temp_c: 92, pattern: spiral, pause_s: 5, rpm: 100, flow_ml_s: 3.0}

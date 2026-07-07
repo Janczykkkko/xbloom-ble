@@ -1,0 +1,16 @@
+# Example recipe: a generic natural / anaerobic coffee — a bit finer and hotter
+# to lift the fruit, with a longer bloom. 15 g * 1:16 = 240 ml (50 + 100 + 90).
+name: Example Natural
+dose_g: 15
+grind: 55
+ratio: 16
+stage_temps: [110.0, 92.0]
+kind: custom
+dripper: Omni
+water_ml: 240
+time: "~2:45"
+note: Fruit-forward natural. Longer bloom, slightly finer grind, spiral pours.
+pours:
+  - {label: Bloom,  ml: 50,  temp_c: 94, pattern: spiral, agitation: true, pause_s: 45, rpm: 110, flow_ml_s: 3.0}
+  - {label: Pour 1, ml: 100, temp_c: 92, pattern: spiral, pause_s: 5, rpm: 110, flow_ml_s: 3.0}
+  - {label: Pour 2, ml: 90,  temp_c: 90, pattern: spiral, pause_s: 5, rpm: 110, flow_ml_s: 3.0}
