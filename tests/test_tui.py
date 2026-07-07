@@ -283,18 +283,22 @@ def test_journey_brew_starts_remotely(store):
 def test_journey_escape_leaves_brewing_but_keeps_it_running(store):
     async def s(app, pilot):
         await start_brew(app, pilot, "b")
-        for _ in range(60):                       # wait until mid-brew
+        target = app._current.total_water_ml
+        caught_midbrew = False
+        for _ in range(200):                      # catch it genuinely mid-brew
             await pilot.pause(0.02)
-            if app._brewing and app._water:
+            if app._brewing and app._water and app._water[-1] < target:
+                caught_midbrew = True
                 break
-        await pilot.press("escape")               # leave the brewing tab
+        await pilot.press("escape")               # leave the brewing tab MID-brew
         await pilot.pause(0.05)
         left_tab = app._view
-        still_brewing = app._brewing
-        await await_brew(app, pilot)              # brew keeps going + completes
-        return left_tab, still_brewing, app._water[-1]
-    left_tab, still_brewing, final = drive(store, s, speed=0.03, auto_start=0.05)
-    assert left_tab == "recipes" and still_brewing and final > 0
+        await await_brew(app, pilot)              # brew keeps going after we left…
+        return caught_midbrew, left_tab, app._water[-1], target
+    # Deterministic: leaving the tab must not cancel the brew, so it completes to
+    # the full target (a timing-independent proof, vs. sampling `_brewing`).
+    caught, left_tab, final, target = drive(store, s, speed=0.05, auto_start=0.05)
+    assert caught and left_tab == "recipes" and final == target
 
 
 def test_journey_cancel_stops_brew(store):
