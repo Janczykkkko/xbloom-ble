@@ -225,11 +225,9 @@ xbloom tui --recipes ./recipes            # or just: xbloom
 
 Run it against the simulator (no machine) with `--demo` to explore it safely.
 
-| Recipes + detail sidebar | Live brew graph |
-|---|---|
-| ![Recipes tab](docs/img/tui-recipes.png) | ![Brewing tab](docs/img/tui-brewing.png) |
-| **Validated editor** | **Brew history + telemetry** |
-| ![Editor](docs/img/tui-editor.png) | ![History tab](docs/img/tui-history.png) |
+| Recipes + detail sidebar | Live brew graph | Brew history + telemetry |
+|---|---|---|
+| ![Recipes tab](docs/img/tui-recipes.png) | ![Brewing tab](docs/img/tui-brewing.png) | ![History tab](docs/img/tui-history.png) |
 
 ### Program the dial presets (save-slots)
 
