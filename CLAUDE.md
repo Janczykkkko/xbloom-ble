@@ -25,8 +25,10 @@ Concretely:
   and `0x46` (start)**. **Never build, emit, or send these opcodes. Never add an
   auto-start / auto-confirm code path.**
 - `build_load_frames()` returns **exactly four** LOAD frames (`0xa4`, `0xa6`,
-  `0xa8`, `0x41`) and nothing else. There is a belt-and-braces assertion in it that
-  rejects a forbidden opcode if one ever crept in — keep it.
+  `0xa8`, and the pours frame — `0x41` when grinding, `0x44` for a no-grind /
+  grinder-off recipe) and nothing else. `0x44` is a pours opcode, NOT a start opcode —
+  it stages, it does not brew. There is a belt-and-braces assertion in it that
+  rejects a forbidden opcode (`0x42` commit / `0x46` start) if one ever crept in — keep it.
 - There is a **test guarding this** (`tests/test_protocol.py::test_no_forbidden_opcodes`,
   plus `test_load_frames_opcode_order`). **Keep these tests; never weaken or delete
   them.** If you touch the protocol layer, they must still pass.

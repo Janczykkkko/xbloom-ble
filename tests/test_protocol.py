@@ -119,6 +119,34 @@ def test_load_frames_opcode_order():
     assert [f[3] for f in frames] == [0xA4, 0xA6, 0xA8, 0x41]
 
 
+def test_pours_opcode_and_ratio_byte():
+    """The pours frame: opcode 0x41 (grind) / 0x44 (no-grind), and the trailing
+    byte is the ratio×10 (derived from Σpours/dose), NOT a fixed 0xa0."""
+    r = {"dose": 16, "grind": 55, "pours": [
+        {"ml": 40, "temp": 92, "pattern": "spiral", "pause": 30, "rpm": 100, "flow": 3.0},
+        {"ml": 200, "temp": 92, "pattern": "spiral", "pause": 5, "rpm": 100, "flow": 3.0}]}
+    pours = build_load_frames(r)[-1]
+    assert pours[3] == 0x41            # grinder ON → 0x41
+    assert pours[-4] == 55             # grind byte
+    assert pours[-3] == 0x96           # ratio 240/16 = 15 → 0x96 (was hard-coded 0xa0)
+
+    r["grind"] = 0                     # no-grind
+    ng = build_load_frames(r)[-1]
+    assert ng[3] == 0x44               # grinder OFF → 0x44 opcode
+    assert ng[-4] == NO_GRIND_WIRE     # grind byte = 0xFE
+    assert ng[-3] == 0x96              # same ratio byte
+
+
+def test_ratio_byte_matches_common_ratios():
+    def ratio_byte(total, dose):
+        r = {"dose": dose, "grind": 55, "pours": [
+            {"ml": total, "temp": 92, "pattern": "spiral", "pause": 5, "rpm": 100, "flow": 3.0},
+            {"ml": 1, "temp": 92, "pattern": "spiral", "pause": 5, "rpm": 100, "flow": 3.0}]}
+        return build_load_frames(r)[-1][-3]
+    assert ratio_byte(159, 16) == 0x64   # 160/16 = 10.0 → 0x64  (1:10, seen in app)
+    assert ratio_byte(255, 16) == 0xa0   # 256/16 = 16.0 → 0xa0  (1:16)
+
+
 def test_grind_byte_passthrough_and_no_grind_sentinel():
     """The 0x41 grind byte (2nd-to-last, before the tail) is the grind — except
     grind 0 (no-grind / pre-ground) is emitted as the 0xFE sentinel, not 0x00."""

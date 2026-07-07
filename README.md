@@ -147,13 +147,6 @@ OK: 'Example Washed' — 16 g, grind 62, 3 pours, 240 ml total water
 
 ### Load a recipe and watch the brew
 
-> ⚠️ **Known issue ([#10](https://github.com/Janczykkkko/xbloom-ble/issues/10)): staging a
-> recipe (`xbloom brew` / `load_recipe`) does not reliably arm the machine** — it connects but
-> the arm times out (`timed out waiting for state 0x1f`). Forcing PRO mode does not fix it; the
-> vendor app uses a different pours opcode (`0x44`) to stage a brew, so the `0x41` load sequence
-> appears not to arm. **The dial presets (`xbloom save-slots`, below) work reliably — use those
-> meanwhile.** Cloud sync and slot programming are unaffected.
-
 ```bash
 xbloom brew recipes/example-washed.yaml --address AA:BB:CC:DD:EE:FF
 ```
@@ -321,10 +314,11 @@ On the wire it maps to a sentinel, not `0`:
   off (matching an app-made no-grind recipe; sending `grinderSize: 0` makes the app
   show a literal "0").
 
-> ⚠️ **Observed, not spec.** The `0xFE` sentinel was recovered from an HCI capture of
-> the app's grinder-off save (see [`docs/REVERSE-ENGINEERING.md`](docs/REVERSE-ENGINEERING.md)),
-> and the cloud behaviour is verified against an app-made recipe. The BLE side has not
-> yet been re-confirmed by driving a machine from this library.
+> **Reverse-engineered, and confirmed on hardware.** The `0xFE` grind sentinel and the
+> `0x44` grinder-off pours opcode were recovered from HCI captures (see
+> [`docs/REVERSE-ENGINEERING.md`](docs/REVERSE-ENGINEERING.md)) and verified by driving a
+> machine from this library (slot preset skips the grinder; a `grind: 0` recipe stages via
+> `0x44`). The cloud behaviour is verified against an app-made recipe.
 
 The pour count must be **≥2** (at least a bloom and a first pour), and if you give
 an optional `ratio`, Σ(pour ml) must equal `dose_g * ratio`.
@@ -381,27 +375,39 @@ Vendor service `0000e0ff-3c17-d293-8e48-14fe2e4da212`:
 
 ### The LOAD sequence
 
-Sent frame-by-frame to `ffe1`, waiting for each ACK on `ffe2` (the machine
-echoes the command, e.g. `580207a6…`):
+Sent to `ffe1`; ACKs come back as notifications on `ffe2` (the machine echoes the
+command, e.g. `580207a6…`):
 
 1. **`0xa4`** — session start. Constant payload `01 b9 00 00 00 01 00 00 00`.
-2. **`0xa6`** — dose. Dose in grams as a `u8` at payload offset 9.
-3. **`0xa8`** — stage temps. `01` + f32 LE temp1 + f32 LE temp2 (default
+2. **`0x56`** — status handshake. The machine replies with a status/info frame. On a
+   fresh connection the machine will **not arm** until it has settled out of its
+   post-connect transitional state, so the app sends this and pauses briefly before
+   staging; this package does the same (a short settle after `a4`/`0x56`). Skipping it
+   and firing the dose/temps/pours frames immediately gets no acks and never arms.
+3. **`0xa6`** — dose. Dose in grams as a `u8` at payload offset 9.
+4. **`0xa8`** — stage temps. `01` + f32 LE temp1 + f32 LE temp2 (default
    `110.0`, `90.0`).
-4. **`0x41`** — pours + grind (see byte map below).
+5. **`0x41`** (grind) or **`0x44`** (grinder off / no-grind) — pours frame (see byte
+   map below).
 
-After frame 4 the machine reports STATE `0x1f` (armed) and **waits for the human
-to approve on the machine**. The protocol's `0x42` (commit) and `0x46` (start)
+After the pours frame the machine reports STATE `0x1f` (armed) and **waits for the
+human to approve on the machine**. The protocol's `0x42` (commit) and `0x46` (start)
 opcodes would force-start the brew — **this package never sends them.**
 
-### The `0x41` pours frame payload
+### The pours frame payload (`0x41` / `0x44`)
+
+The pours frame's opcode is **`0x41`** when the machine grinds, or **`0x44`** when the
+grinder is **off** (no-grind / pre-ground). Both carry the identical body:
 
 ```
-01 | LEN(u8 = #body bytes) | <pour segments…> | grind(u8) | tail(u8 = 0xa0)
+01 | LEN(u8 = #body bytes) | <pour segments…> | grind(u8) | ratio(u8)
 ```
 
-`grind` is the grinder setting `1–80`, **or `0xFE`** for a **no-grind** recipe (brew
-pre-ground; recipe `grind: 0` → wire `0xFE`) — see *No-grind* above.
+- `grind` — the grinder setting `1–80`, **or `0xFE`** for a **no-grind** recipe (brew
+  pre-ground; recipe `grind: 0` → wire `0xFE`, and the opcode becomes `0x44`) — see *No-grind*.
+- `ratio` — the brew ratio **× 10** (water : coffee): `1:10 → 0x64`, `1:15 → 0x96`,
+  `1:16 → 0xa0`. **The machine validates this against Σ(pour ml) / dose and rejects a load
+  whose ratio byte doesn't match**, so it is derived from the recipe (not a fixed value).
 
 Each pour becomes an **8-byte segment**:
 
