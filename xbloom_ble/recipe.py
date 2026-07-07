@@ -175,9 +175,13 @@ class Recipe:
         if not (1 <= int(self.dose_g) <= 18):
             errors.append(f"dose_g {self.dose_g} out of range (1–18 g; 18 g is the app maximum)")
         # grind: 1–80 — the grinder has 80 micro-steps (~18.75 µm each); a lower
-        # number is finer. (xBloom Studio published spec.)
-        if not (1 <= int(self.grind) <= 80):
-            errors.append(f"grind {self.grind} out of range (1–80; the grinder has 80 micro-steps)")
+        # number is finer. (xBloom Studio published spec.) A grind of 0 is the
+        # special "no-grind" value: brew pre-ground, grinder off (see NO_GRIND).
+        if int(self.grind) != 0 and not (1 <= int(self.grind) <= 80):
+            errors.append(
+                f"grind {self.grind} out of range (1–80; the grinder has 80 micro-steps — "
+                f"or 0 for no-grind / pre-ground)"
+            )
 
         # stage temps (machine preheat/stage set-points; default 110/90). These
         # are NOT the pour temperature and legitimately exceed the 95 °C pour cap,
@@ -243,6 +247,15 @@ class Recipe:
     # ------------------------------------------------------------------
     # Protocol bridge
     # ------------------------------------------------------------------
+    @property
+    def no_grind(self) -> bool:
+        """True if this recipe brews **pre-ground** (grinder off) — i.e. ``grind == 0``.
+
+        The machine is asked to skip the grinder (wire byte ``0xFE``); its stored
+        grind size is left untouched.
+        """
+        return int(self.grind) == 0
+
     @property
     def total_water_ml(self) -> int:
         return sum(int(p.ml) for p in self.pours)

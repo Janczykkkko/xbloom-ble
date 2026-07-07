@@ -260,7 +260,7 @@ def recipe_to_cloud(
 
     bypass_on = float(bypass_volume) > 0
 
-    return {
+    out = {
         "theName": recipe.name,
         "dose": float(recipe.dose_g),
         # grandWater is the RATIO, not the total water volume.
@@ -270,7 +270,8 @@ def recipe_to_cloud(
         "cupType": cup_type_code,
         "adaptedModel": int(adapted_model),
         "isEnableBypassWater": _cloud_bool(bypass_on),
-        "isSetGrinderSize": _cloud_bool(True),
+        # grinder off for a no-grind (pre-ground) recipe; 1 = on, 2 = off
+        "isSetGrinderSize": _cloud_bool(not recipe.no_grind),
         "theColor": the_color,
         "theSubsetId": 0,
         "bypassTemp": float(bypass_temp),
@@ -283,6 +284,12 @@ def recipe_to_cloud(
             pour_list, ensure_ascii=False, separators=(",", ":")
         ),
     }
+    # No-grind (pre-ground): the app OMITS grinderSize entirely (not 0) alongside
+    # isSetGrinderSize=off — verified against an app-made no-grind recipe. Sending
+    # grinderSize:0 makes the app show a literal "0" grind size instead of blank.
+    if recipe.no_grind:
+        out.pop("grinderSize", None)
+    return out
 
 
 # ---------------------------------------------------------------------------

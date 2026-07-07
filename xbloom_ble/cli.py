@@ -69,7 +69,8 @@ def _cmd_validate(args) -> int:
     recipe, err = _load_recipe_or_exit(args.recipe)
     if err is not None:
         return err
-    print(f"OK: '{recipe.name}' — {recipe.dose_g} g, grind {recipe.grind}, "
+    grind_str = "no-grind (pre-ground)" if recipe.no_grind else f"grind {recipe.grind}"
+    print(f"OK: '{recipe.name}' — {recipe.dose_g} g, {grind_str}, "
           f"{len(recipe.pours)} pours, {recipe.total_water_ml} ml total water")
     return 0
 

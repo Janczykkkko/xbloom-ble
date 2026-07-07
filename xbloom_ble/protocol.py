@@ -183,15 +183,34 @@ def _pour_segments(p: Mapping) -> list[bytes]:
     return segs
 
 
+# Grind byte sentinel — "no-grind" / brew pre-ground (grinder off).
+# A recipe grind of ``0`` is a request to SKIP the grinder (brew already-ground
+# coffee), not to grind at setting 0. On the wire the machine reads a valid grind
+# as ``1–80``; the app encodes "grinder off" as the out-of-range byte ``0xFE`` and
+# leaves the machine's stored grind SIZE untouched. (Observed in an HCI capture of
+# the app's grinder-OFF save; sending an actual ``0`` grinds at the finest setting.)
+NO_GRIND = 0            # recipe-level grind meaning "don't grind" (pre-ground)
+NO_GRIND_WIRE = 0xFE    # the byte the machine reads as "skip the grinder"
+
+
+def _grind_byte(grind: int) -> int:
+    """Map a recipe grind to its wire byte: ``0`` (no-grind) → ``0xFE``, else the grind."""
+    return NO_GRIND_WIRE if int(grind) == NO_GRIND else int(grind) & 0xFF
+
+
 def build_41(pours: Iterable[Mapping], grind: int, tail: int = 0xA0) -> bytes:
-    """0x41 pours+grind payload: ``01 | LEN(u8) | <segments> | grind | tail``."""
+    """0x41 pours+grind payload: ``01 | LEN(u8) | <segments> | grind | tail``.
+
+    A ``grind`` of ``0`` is the **no-grind** sentinel (brew pre-ground): it is
+    emitted as the wire byte ``0xFE``, which tells the machine to skip the grinder.
+    """
     segs: list[bytes] = []
     for i, p in enumerate(pours):
         # RPM is carried ONLY on the first pour — the machine zeroes it on later
         # pours (verified byte-for-byte against the vendor app's captures).
         segs.extend(_pour_segments({**p, "rpm": 0} if i else p))
     body = b"".join(segs)
-    return bytes([0x01, len(body) & 0xFF]) + body + bytes([int(grind) & 0xFF, tail & 0xFF])
+    return bytes([0x01, len(body) & 0xFF]) + body + bytes([_grind_byte(grind), tail & 0xFF])
 
 
 def build_load_frames(recipe: Mapping) -> list[bytes]:
