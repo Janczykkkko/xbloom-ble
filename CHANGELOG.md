@@ -8,6 +8,15 @@ Conventional-Commit history — new versions are inserted below.
 
 <!-- version list -->
 
+## v1.1.1 (2026-07-07)
+
+### Bug Fixes
+
+- Stage recipes correctly (ratio byte, handshake, no-grind opcode)
+  ([#12](https://github.com/Janczykkkko/xbloom-ble/pull/12),
+  [`1f7cfff`](https://github.com/Janczykkkko/xbloom-ble/commit/1f7cfff18d7f1df655348178603b5eb5edfd5757))
+
+
 ## v1.1.0 (2026-07-07)
 
 ### Features
