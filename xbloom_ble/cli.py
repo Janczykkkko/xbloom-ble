@@ -5,7 +5,9 @@ Subcommands:
 * ``xbloom scan``              — list discovered machines.
 * ``xbloom validate <recipe>`` — validate a recipe file.
 * ``xbloom brew <recipe>``     — load a recipe and stream telemetry. **Loads
-  only** — the machine prompts and the human approves the brew on the device.
+  only** by default — the machine prompts and the human approves on the device.
+  Pass ``--start`` to also launch the brew remotely (commit + start), like the
+  app's Brew button. ⚠️ ``--start`` dispenses hot water — only with the machine ready.
 * ``xbloom save-slots A B C``   — program the machine's three Easy-Mode dial
   presets from three recipes (a preset write — never brews). Presets live on the
   machine; the xBloom app overwrites them if you reassign a slot there.
@@ -33,7 +35,11 @@ log = logging.getLogger("xbloom_ble")
 
 LOAD_BANNER = (
     "✋ Recipe loaded. Add beans + cup, then APPROVE ON THE MACHINE to start. "
-    "(This tool will NOT start it.)"
+    "(Loaded only — this tool did NOT start it. Re-run with --start to launch remotely.)"
+)
+START_BANNER = (
+    "🔥 Starting the brew remotely (commit + start) — the machine is dispensing "
+    "hot water now."
 )
 
 
@@ -126,7 +132,13 @@ async def _cmd_brew(args) -> int:
             armed = await client.load_recipe(recipe)
             _record(armed)
             print()
-            print(LOAD_BANNER)
+            if getattr(args, "start", False):
+                print(START_BANNER)
+                print()
+                brewing = await client.start()
+                _record(brewing)
+            else:
+                print(LOAD_BANNER)
             print()
             print("Streaming telemetry (Ctrl-C to stop)…")
             await client.stream_telemetry(_record, duration=args.timeout)
@@ -311,11 +323,21 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="xbloom",
         description="Unofficial Bluetooth LE control for the xBloom Studio "
-        "(loads recipes only — the human approves the brew on the machine).",
+        "(load a recipe, then approve on the machine or start the brew remotely).",
     )
     p.add_argument("--version", action="version", version=f"xbloom-ble {__version__}")
     p.add_argument("-v", "--verbose", action="store_true", help="verbose logging")
-    sub = p.add_subparsers(dest="command", required=True)
+    # No subcommand → launch the TUI (an interactive terminal UI).
+    sub = p.add_subparsers(dest="command", required=False)
+
+    s_tui = sub.add_parser("tui", help="launch the interactive terminal UI (default)")
+    s_tui.add_argument("--recipes", metavar="DIR",
+                       help="recipe directory (default ~/.xbloom/recipes)")
+    s_tui.add_argument("--address", help="machine BLE address (or set XBLOOM_ADDRESS)")
+    s_tui.add_argument("--demo", action="store_true",
+                       help="run against a simulated machine (no hardware needed)")
+    s_tui.add_argument("--auto-brew", action="store_true",
+                       help="start a brew immediately (demos/tests)")
 
     s_scan = sub.add_parser("scan", help="discover xBloom machines")
     s_scan.add_argument("--timeout", type=float, default=8.0, help="scan seconds (default 8)")
@@ -325,9 +347,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     s_brew = sub.add_parser(
         "brew",
-        help="load a recipe and stream telemetry (does NOT start the brew)",
+        help="load a recipe and stream telemetry (add --start to launch the brew)",
     )
     s_brew.add_argument("recipe", help="path to a recipe YAML, or an http(s):// URL")
+    s_brew.add_argument("--start", action="store_true",
+                        help="also START the brew remotely (commit+start) — ⚠️ dispenses hot water")
     s_brew.add_argument("--address", help="machine BLE address (or set XBLOOM_ADDRESS)")
     s_brew.add_argument("--timeout", type=float, default=300.0,
                         help="telemetry stream seconds (default 300)")
@@ -418,8 +442,22 @@ def main(argv: list[str] | None = None) -> int:
             return 130
     if args.command == "cloud":
         return _cmd_cloud(args)
+    if args.command in (None, "tui"):
+        return _cmd_tui(args)
     parser.error("unknown command")
     return 2  # pragma: no cover
+
+
+def _cmd_tui(args) -> int:
+    import os
+
+    from .tui import run_tui
+    return run_tui(
+        recipes_dir=getattr(args, "recipes", None),
+        address=getattr(args, "address", None) or os.environ.get("XBLOOM_ADDRESS"),
+        demo=getattr(args, "demo", False),
+        auto_brew=getattr(args, "auto_brew", False),
+    )
 
 
 if __name__ == "__main__":  # pragma: no cover

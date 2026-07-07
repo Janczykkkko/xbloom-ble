@@ -124,9 +124,11 @@ sequence and a **state byte** the machine reports:
   brewing · `0x43` brew-record (live water/coffee weights) · `0x41` complete.
 
 This is the key safety insight behind the library: **loading the recipe is enough to make the
-machine prompt the human.** So the tool only ever sends the load sequence (`a4 → a6 → a8 → 0x41`)
-and **never** `0x42`/`0x46` — the person physically approves on the machine to start. A controller
-*cannot* brew on an empty machine.
+machine prompt the human** — the load sequence (`a4 → a6 → a8 → 0x41`) only *arms* the machine, so
+a load can never brew by accident. Starting the brew is a separate, explicit step: the app sends
+`0x42` (commit) → `0x46` (start) — captured byte-for-byte and exposed here as `build_commit()` /
+`build_start()` (and `0x47` = cancel). The library keeps the two apart: `build_load_frames()` never
+carries a start opcode; starting only happens through an explicit `start()` call.
 
 ---
 

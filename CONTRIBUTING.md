@@ -60,14 +60,16 @@ ruff check .
 
 This is non-negotiable and the heart of the project:
 
-> **The tool only ever LOADS a recipe. The machine then prompts, and a human
-> physically approves the brew ON THE MACHINE to start it. The tool never
-> auto-starts a brew.**
+> **Loading a recipe only *arms* the machine — it must never start a brew.
+> Starting is always a separate, explicit call, never a side effect of loading.**
 
-The protocol's force-start opcodes — **`0x42` (commit)** and **`0x46` (start)** —
-are deliberately **never built or sent**. There is intentionally no auto-start code
-path, and a test (`tests/test_protocol.py`) guards it. **Any PR that emits `0x42`/
-`0x46`, adds an auto-confirm path, or weakens those tests will not be accepted.**
+`build_load_frames()` returns only the four LOAD frames and **never** a commit
+(`0x42`) / start (`0x46`) / cancel (`0x47`) opcode — there's a belt-and-braces
+assertion, and a test (`tests/test_protocol.py::test_load_frames_are_load_only`)
+guards it. Starting a brew is done exclusively through the dedicated
+`build_commit()` / `build_start()` builders behind an explicit `start()` call.
+**Any PR that lets loading a recipe start a brew, wires commit/start as a side
+effect, or weakens those tests will not be accepted.**
 
 ## What's especially wanted
 

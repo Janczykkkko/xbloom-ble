@@ -40,20 +40,33 @@ Sent frame-by-frame, waiting for each ACK on ``ffe2``:
 3. ``0xa8`` — stage temps (``01`` + f32le temp1 + f32le temp2, default 110/90).
 4. ``0x41`` — pours + grind.
 
-After these four frames the machine reports STATE ``0x1f`` (armed/loaded) and
-**waits for the human to approve the brew on the machine itself**.
+After these four frames the machine reports STATE ``0x1f`` (armed/loaded). At
+that point you can either approve the brew **on the machine** or start it
+remotely (below), exactly like the official app.
 
-⚠️ SAFETY — opcodes deliberately NOT emitted
---------------------------------------------
-The original protocol also defines:
+Starting a brew (commit / start / cancel)
+-----------------------------------------
+Loading only *arms* the machine. To start the brew remotely — the way the app
+does when you tap "Brew" — three further single-byte frames are used:
 
-* ``0x42`` — commit.
-* ``0x46`` — start / force-start.
+* ``0x42`` (seq ``0x1f``) — **commit**: the machine moves to ``0x1e``
+  (awaiting-confirm) and shows its ~99 s add-beans countdown.
+* ``0x46`` (seq ``0x9e``) — **start**: the "go" — the machine begins brewing.
+* ``0x47`` (seq ``0x9e``) — **cancel**: abort a committed/running brew.
 
-Sending those bypasses the human-approval step and force-starts a brew. This
-package **never** builds or sends them. :func:`build_load_frames` returns only
-the four LOAD frames. There is intentionally no code path in this package that
-emits ``0x42`` or ``0x46``.
+All three carry the constant one-byte payload ``01`` and were captured
+byte-for-byte from the vendor app (:func:`build_commit`, :func:`build_start`,
+:func:`build_cancel`).
+
+⚠️ SAFETY — loading and starting are separate, explicit steps
+-------------------------------------------------------------
+Starting a brew physically dispenses near-boiling water. The design keeps that
+deliberate: :func:`build_load_frames` returns **only** the four LOAD frames and
+never a commit/start opcode, so *loading a recipe can never brew by accident*.
+The commit/start frames live in their own builders and are only emitted when a
+caller explicitly asks to start (or cancel) a brew. Never wire commit/start as a
+side effect of loading — only in response to a clear, intentional "start" action
+with the machine physically ready.
 """
 
 from __future__ import annotations
@@ -75,23 +88,31 @@ __all__ = [
     "build_status_query",
     "build_save_slot",
     "build_set_mode",
+    "build_commit",
+    "build_start",
+    "build_cancel",
     "POURS_CMD_GRIND",
     "POURS_CMD_NO_GRIND",
     "NO_GRIND",
     "NO_GRIND_WIRE",
     "CMD_SAVE_SLOT",
     "CMD_SET_MODE",
-    "FORBIDDEN_COMMIT_OPCODE",
-    "FORBIDDEN_START_OPCODE",
+    "LOAD_SEQ",
+    "BREW_SEQ",
+    "COMMIT_OPCODE",
+    "START_OPCODE",
+    "CANCEL_OPCODE",
 ]
 
-# Sequence byte used for the load sequence.
+# Sequence byte used for the load sequence, and for the brew (commit/start) phase.
 LOAD_SEQ = 0x1F
+BREW_SEQ = 0x9E
 
-# Opcodes that force-start a brew. Documented here so it is unmistakable that
-# they exist — and that this package never builds or sends them.
-FORBIDDEN_COMMIT_OPCODE = 0x42  # commit
-FORBIDDEN_START_OPCODE = 0x46  # start / force-start
+# Brew-control opcodes. These START (or cancel) a brew — they are NOT part of the
+# load sequence and are only emitted by an explicit start/cancel call.
+COMMIT_OPCODE = 0x42  # commit: arm → awaiting-confirm (seq 0x1f)
+START_OPCODE = 0x46   # start: the "go" — begin brewing (seq 0x9e)
+CANCEL_OPCODE = 0x47  # cancel: abort a committed/running brew (seq 0x9e)
 
 # (pattern, agitation) -> (pat_byte, agit_byte). Verified combos from the
 # capture; others are best-effort extrapolation.
@@ -243,9 +264,10 @@ def build_load_frames(recipe: Mapping) -> list[bytes]:
 
     Returns exactly ``[a4, a6, a8, pours]`` — the four frames that *load* the
     recipe onto the machine. The pours opcode is ``0x41`` normally, or ``0x44``
-    for a **no-grind** recipe (``grind == 0``, brew pre-ground). It does **not**
-    include ``0x42`` (commit) or ``0x46`` (start): the human approves the brew on
-    the machine.
+    for a **no-grind** recipe (``grind == 0``, brew pre-ground). It **never**
+    includes ``0x42`` (commit) or ``0x46`` (start): loading only arms the machine,
+    so a load can never brew by accident. To start a brew, call the dedicated
+    :func:`build_commit`/:func:`build_start` builders explicitly.
 
     ``recipe`` may be a plain dict (with keys ``dose``, ``grind``, optional
     ``stage_temps``, optional ``tail``, optional ``seq``, and ``pours``) or any
@@ -262,11 +284,50 @@ def build_load_frames(recipe: Mapping) -> list[bytes]:
         xbloom_frame(0xA8, seq, build_a8(t1, t2)),
         xbloom_frame(pours_cmd, seq, build_41(recipe["pours"], recipe["grind"], tail)),
     ]
-    # Belt-and-braces safety assertion: never let a forbidden opcode out.
+    # Belt-and-braces: loading is load-only. A commit/start opcode must never ride
+    # in on the LOAD sequence — starting a brew is always a separate, explicit call.
     for fr in frames:
-        if fr[3] in (FORBIDDEN_COMMIT_OPCODE, FORBIDDEN_START_OPCODE):  # pragma: no cover
-            raise AssertionError("load frames must never contain a brew-start opcode")
+        if fr[3] in (COMMIT_OPCODE, START_OPCODE, CANCEL_OPCODE):  # pragma: no cover
+            raise AssertionError("load frames must never contain a brew-start/cancel opcode")
     return frames
+
+
+def build_commit() -> bytes:
+    """The ``0x42`` **commit** frame — arms → awaiting-confirm.
+
+    After a recipe is loaded (machine at STATE ``0x1f`` armed), sending this moves
+    the machine to STATE ``0x1e`` (awaiting-confirm) with its ~99 s add-beans
+    countdown — the same frame the vendor app sends when you tap "Brew". Constant
+    payload ``01``, seq ``0x1f``. Byte-exact vs the app's capture
+    (``580101421f0c000000017fcf``).
+
+    ⚠️ This is a brew-control frame: it is a step toward physically starting a
+    brew. Emit it only in response to an explicit start action.
+    """
+    return xbloom_frame(COMMIT_OPCODE, LOAD_SEQ, b"\x01")
+
+
+def build_start() -> bytes:
+    """The ``0x46`` **start** frame — the "go" that begins brewing.
+
+    Sent after :func:`build_commit` (machine at ``0x1e``); the machine begins
+    brewing (STATE ``0x3b``). Constant payload ``01``, seq ``0x9e`` (the brew
+    phase id). Byte-exact vs the app's capture (``580101469e0c0000000180a1``).
+
+    ⚠️ This physically dispenses near-boiling water. Emit it only when the machine
+    is ready and someone intends to brew.
+    """
+    return xbloom_frame(START_OPCODE, BREW_SEQ, b"\x01")
+
+
+def build_cancel() -> bytes:
+    """The ``0x47`` **cancel** frame — abort a committed/running brew.
+
+    Returns the machine toward idle without completing the brew. Constant payload
+    ``01``, seq ``0x9e``. Byte-exact vs the app's capture
+    (``580101479e0c00000001553e``).
+    """
+    return xbloom_frame(CANCEL_OPCODE, BREW_SEQ, b"\x01")
 
 
 def build_session_start() -> bytes:

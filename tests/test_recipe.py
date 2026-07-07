@@ -222,3 +222,63 @@ def test_empty_yaml_raises(tmp_path):
     p.write_text("", encoding="utf-8")
     with pytest.raises(RecipeError):
         Recipe.from_yaml(p)
+
+
+# ── enriched brew-level metadata (optional, never sent to the machine) ──────
+ENRICHED = {
+    "name": "Iced Fireworks",
+    "dose_g": 15,
+    "grind": 58,
+    "ratio": 10.0,
+    "kind": "custom",
+    "dripper": "Omni",
+    "water_ml": 150,
+    "hot_water_ml": 150,
+    "ice_g": 85,
+    "time": "~2:00",
+    "note": "strawberry-forward; ground finer as it aged",
+    "pours": [
+        {"label": "Bloom", "ml": 40, "temp_c": 92, "pattern": "spiral",
+         "pause_s": 45, "rpm": 120, "flow_ml_s": 3.0, "agitation": True},
+        {"label": "Pour 1", "ml": 110, "temp_c": 91, "pattern": "spiral",
+         "pause_s": 5, "rpm": 120, "flow_ml_s": 3.0},
+    ],
+}
+
+
+def test_enriched_fields_parse():
+    r = Recipe.from_dict(ENRICHED)
+    assert r.kind == "custom" and r.dripper == "Omni"
+    assert r.water_ml == 150 and r.hot_water_ml == 150 and r.ice_g == 85
+    assert r.time == "~2:00" and r.note.startswith("strawberry")
+    assert r.pours[0].label == "Bloom" and r.pours[1].label == "Pour 1"
+
+
+def test_enriched_metadata_ignored_by_protocol():
+    """Metadata must never leak into the machine payload."""
+    proto = Recipe.from_dict(ENRICHED).to_protocol_dict()
+    assert set(proto) == {"dose", "grind", "stage_temps", "pours"}
+    for p in proto["pours"]:
+        assert "label" not in p          # pour labels are informational only
+
+
+def test_enriched_roundtrips_through_to_dict():
+    r = Recipe.from_dict(ENRICHED)
+    again = Recipe.from_dict(r.to_dict())
+    assert again.to_dict() == r.to_dict()
+    d = r.to_dict()
+    assert d["kind"] == "custom" and d["note"].startswith("strawberry")
+    assert d["pours"][0]["label"] == "Bloom"
+
+
+def test_plain_recipe_omits_absent_metadata():
+    """A recipe with no metadata serialises without the optional keys (back-compat)."""
+    d = Recipe.from_dict(VALID).to_dict()
+    for k in ("kind", "dripper", "water_ml", "hot_water_ml", "ice_g", "time", "note"):
+        assert k not in d
+    assert "label" not in d["pours"][0]
+
+
+def test_negative_water_ml_raises():
+    with pytest.raises(RecipeError):
+        Recipe.from_dict(_with(water_ml=-5))

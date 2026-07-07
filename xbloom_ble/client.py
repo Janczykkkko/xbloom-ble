@@ -3,10 +3,16 @@
 This is the only module that touches hardware. It discovers the machine,
 connects, writes the LOAD frames, and streams status telemetry.
 
-⚠️ Safety: :meth:`XBloomClient.load_recipe` only ever *loads* a recipe. It
-writes the four LOAD frames (``a4, a6, a8, 41``) and returns once the machine
-reports STATE ``0x1f`` (armed). It then waits for the human to approve the brew
-on the machine. There is no method that sends ``0x42``/``0x46``.
+Safety model: loading and starting are **separate, explicit** operations.
+:meth:`XBloomClient.load_recipe` only *loads* (writes ``a4, a6, a8, 41`` and
+returns once the machine is armed at STATE ``0x1f``) — it never starts a brew, so
+a load can never brew by accident. :meth:`XBloomClient.start` is the deliberate
+"go": it sends commit (``0x42``) + start (``0x46``) to launch the brew remotely,
+exactly like the app's Brew button. :meth:`XBloomClient.brew` is the convenience
+that loads then starts. :meth:`XBloomClient.cancel_brew` aborts (``0x47``).
+
+⚠️ Starting a brew physically dispenses near-boiling water — only call
+:meth:`start`/:meth:`brew` when the machine is ready and someone intends to brew.
 """
 
 from __future__ import annotations
@@ -16,10 +22,13 @@ import logging
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 
 from .protocol import (
+    build_cancel,
+    build_commit,
     build_load_frames,
     build_save_slot,
     build_session_start,
     build_set_mode,
+    build_start,
     build_status_query,
 )
 from .recipe import Recipe
@@ -36,6 +45,9 @@ NAME_PREFIX = "XBLOOM"
 
 # State byte that means "recipe loaded / armed".
 STATE_ARMED = 0x1F
+# Brew lifecycle states: 0x1e awaiting-confirm (after commit), 0x3b brewing.
+STATE_AWAITING_CONFIRM = 0x1E
+STATE_BREWING = 0x3B
 # Slot-save status states (see telemetry): 0x43 saving, 0x25 saved, 0x01 idle.
 STATE_IDLE = 0x01
 STATE_SLOTS_SAVED = 0x25
@@ -209,6 +221,59 @@ class XBloomClient:
             return armed
         finally:
             await self._stop_notify()
+
+    # ------------------------------------------------------------------
+    # Starting / cancelling a brew  (explicit — dispenses hot water)
+    # ------------------------------------------------------------------
+    async def start(self, *, settle: float = 1.5) -> StatusEvent:
+        """Start the currently-armed brew: commit (``0x42``) then start (``0x46``).
+
+        The machine must already be armed (call :meth:`load_recipe` first). Sends
+        the commit frame (machine → ``0x1e`` awaiting-confirm), waits briefly for
+        that state (up to ``settle`` extra seconds, but proceeds regardless), then
+        sends the start frame and returns once the machine reports **brewing**
+        (``0x3b``). This mirrors the vendor app's Brew button.
+
+        ⚠️ This physically dispenses near-boiling water. Only call it when the
+        machine is ready (water tank filled, dripper/cup in place) and someone
+        intends to brew — starting is never triggered as a side effect of loading.
+        """
+        if self._client is None or not self._client.is_connected:
+            raise XBloomError("not connected")
+
+        await self._start_notify()
+        try:
+            log.info("→ 0x42 commit (arming the brew)")
+            await self._client.write_gatt_char(CHAR_COMMAND, build_commit(), response=False)
+            try:
+                await self._drain_until_state(STATE_AWAITING_CONFIRM, settle)
+            except XBloomError:
+                log.debug("awaiting-confirm not observed; sending start anyway")
+            await asyncio.sleep(0.4)
+            log.info("→ 0x46 start (brew go)")
+            await self._client.write_gatt_char(CHAR_COMMAND, build_start(), response=False)
+            brewing = await self._drain_until_state(STATE_BREWING, self.ack_timeout)
+            log.info("brew started")
+            return brewing
+        finally:
+            await self._stop_notify()
+
+    async def brew(self, recipe: Recipe, *, settle: float = 2.0) -> StatusEvent:
+        """Load ``recipe`` and immediately start brewing (load + :meth:`start`).
+
+        Convenience for the app-style "tap and brew" flow: it stages the recipe
+        (arming the machine) and then sends commit + start. ⚠️ Same hot-water
+        caveat as :meth:`start` — it brews for real.
+        """
+        await self.load_recipe(recipe, settle=settle)
+        return await self.start()
+
+    async def cancel_brew(self) -> None:
+        """Abort a committed/running brew (``0x47`` cancel), returning toward idle."""
+        if self._client is None or not self._client.is_connected:
+            raise XBloomError("not connected")
+        log.info("→ 0x47 cancel (aborting brew)")
+        await self._client.write_gatt_char(CHAR_COMMAND, build_cancel(), response=False)
 
     async def save_slots(
         self,
