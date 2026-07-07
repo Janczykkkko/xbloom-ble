@@ -72,8 +72,13 @@ __all__ = [
     "build_41",
     "build_load_frames",
     "build_session_start",
+    "build_status_query",
     "build_save_slot",
     "build_set_mode",
+    "POURS_CMD_GRIND",
+    "POURS_CMD_NO_GRIND",
+    "NO_GRIND",
+    "NO_GRIND_WIRE",
     "CMD_SAVE_SLOT",
     "CMD_SET_MODE",
     "FORBIDDEN_COMMIT_OPCODE",
@@ -213,12 +218,34 @@ def build_41(pours: Iterable[Mapping], grind: int, tail: int = 0xA0) -> bytes:
     return bytes([0x01, len(body) & 0xFF]) + body + bytes([_grind_byte(grind), tail & 0xFF])
 
 
+# Pours-frame opcode: 0x41 when the machine grinds, 0x44 when the grinder is OFF
+# (no-grind / pre-ground). Both carry the same pours+grind+ratio body; only the
+# opcode differs. (Verified against the vendor app's HCI captures + on-machine.)
+POURS_CMD_GRIND = 0x41
+POURS_CMD_NO_GRIND = 0x44
+
+
+def _ratio_byte(recipe: Mapping) -> int:
+    """The pours-frame's trailing byte: the brew **ratio × 10** (water:coffee).
+
+    e.g. 1:10 → 0x64, 1:15 → 0x96, 1:16 → 0xa0. The machine validates this against
+    Σ(pour ml) / dose and REJECTS a load whose ratio byte doesn't match — so it must
+    be derived from the recipe, not fixed. An explicit ``tail`` overrides (edge cases)."""
+    if recipe.get("tail") is not None:
+        return int(recipe["tail"]) & 0xFF
+    total = sum(int(p["ml"]) for p in recipe["pours"])
+    dose = int(recipe.get("dose", 0))
+    return (round(total / dose * 10) & 0xFF) if dose else 0xA0
+
+
 def build_load_frames(recipe: Mapping) -> list[bytes]:
     """Build the ordered list of LOAD frames for a recipe.
 
-    Returns exactly ``[a4, a6, a8, 41]`` — the four frames that *load* the
-    recipe onto the machine. It does **not** include ``0x42`` (commit) or
-    ``0x46`` (start): the human approves the brew on the machine.
+    Returns exactly ``[a4, a6, a8, pours]`` — the four frames that *load* the
+    recipe onto the machine. The pours opcode is ``0x41`` normally, or ``0x44``
+    for a **no-grind** recipe (``grind == 0``, brew pre-ground). It does **not**
+    include ``0x42`` (commit) or ``0x46`` (start): the human approves the brew on
+    the machine.
 
     ``recipe`` may be a plain dict (with keys ``dose``, ``grind``, optional
     ``stage_temps``, optional ``tail``, optional ``seq``, and ``pours``) or any
@@ -227,12 +254,13 @@ def build_load_frames(recipe: Mapping) -> list[bytes]:
     """
     seq = recipe.get("seq", LOAD_SEQ)
     t1, t2 = recipe.get("stage_temps", (110.0, 90.0))
-    tail = recipe.get("tail", 0xA0)
+    tail = _ratio_byte(recipe)                                   # ratio × 10, derived
+    pours_cmd = POURS_CMD_NO_GRIND if int(recipe["grind"]) == 0 else POURS_CMD_GRIND
     frames = [
         xbloom_frame(0xA4, seq, build_a4()),
         xbloom_frame(0xA6, seq, build_a6(recipe["dose"])),
         xbloom_frame(0xA8, seq, build_a8(t1, t2)),
-        xbloom_frame(0x41, seq, build_41(recipe["pours"], recipe["grind"], tail)),
+        xbloom_frame(pours_cmd, seq, build_41(recipe["pours"], recipe["grind"], tail)),
     ]
     # Belt-and-braces safety assertion: never let a forbidden opcode out.
     for fr in frames:
@@ -249,6 +277,18 @@ def build_session_start() -> bytes:
     is the first of the LOAD sequence. Carries no brew-start opcode.
     """
     return xbloom_frame(0xA4, LOAD_SEQ, build_a4())
+
+
+def build_status_query() -> bytes:
+    """The ``0x56`` status/handshake frame the app sends right after ``a4`` on connect.
+
+    The machine replies with a status/info notification. Empirically the machine will
+    not arm a freshly-connected session until it has settled past its post-connect
+    transitional state; the app sends this (then waits) before staging a recipe, and
+    :meth:`XBloomClient.load_recipe` does the same so the load reliably reaches the
+    armed state. Carries no brew-start opcode.
+    """
+    return xbloom_frame(0x56, LOAD_SEQ, b"\x01")
 
 
 # Easy-Mode preset slots (A/B/C = 0/1/2). Programming the slots writes a preset
@@ -287,7 +327,7 @@ def build_save_slot(recipe: Mapping, slot: int, scale: bool = True) -> bytes:
     """
     if slot not in (0, 1, 2):
         raise ValueError(f"slot must be 0 (A), 1 (B) or 2 (C); got {slot!r}")
-    tail = recipe.get("tail", 0xA0)
+    tail = _ratio_byte(recipe)                               # ratio × 10, derived (matches the app)
     blob = build_41(recipe["pours"], recipe["grind"], tail)  # 01 | len | pours | grind | tail
     flags = SLOT_FLAG_SCALE_ON if scale else SLOT_FLAG_SCALE_OFF
     payload = bytes([0x01, slot, flags]) + blob[1:]          # drop the 0x41 leading 0x01

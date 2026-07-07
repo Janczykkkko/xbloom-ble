@@ -15,7 +15,13 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 
-from .protocol import build_load_frames, build_save_slot, build_session_start, build_set_mode
+from .protocol import (
+    build_load_frames,
+    build_save_slot,
+    build_session_start,
+    build_set_mode,
+    build_status_query,
+)
 from .recipe import Recipe
 from .telemetry import StatusEvent, parse_notification
 
@@ -153,41 +159,51 @@ class XBloomClient:
     # ------------------------------------------------------------------
     # Loading a recipe  (the ONLY write capability — never starts a brew)
     # ------------------------------------------------------------------
-    async def load_recipe(self, recipe: Recipe) -> StatusEvent:
+    async def load_recipe(self, recipe: Recipe, *, settle: float = 2.0) -> StatusEvent:
         """Load ``recipe`` onto the machine and return once it is armed.
 
-        Writes the four LOAD frames (``a4, a6, a8, 41``) to ``ffe1`` one at a
-        time, waiting for each ACK on ``ffe2`` (the machine echoes the command),
-        and returns the ``StatusEvent`` once the machine reaches STATE ``0x1f``
-        (armed / loaded). **This never starts a brew** — the human approves on
-        the machine.
+        Writes the LOAD frames to ``ffe1`` — ``a4`` (session start), a ``0x56``
+        status handshake, then ``a6`` (dose), ``a8`` (temps) and the pours frame
+        (``0x41``, or ``0x44`` for a no-grind recipe) — waiting for each ACK on
+        ``ffe2``, and returns the ``StatusEvent`` once the machine reaches STATE
+        ``0x1f`` (armed / loaded). **This never starts a brew** — the human
+        approves on the machine.
 
-        ⚠️ **Known issue (#10): this currently does NOT reliably arm the machine** —
-        the arm below times out (the machine connects but never reaches ``0x1f``).
-        Forcing PRO mode does not fix it; the app uses a different pours opcode
-        (``0x44``) to stage a brew, so the ``0x41`` load sequence appears not to arm.
-        **Slot presets (:meth:`save_slots`) work** — use them meanwhile.
+        ``settle`` (seconds) is the pause after ``a4``+``0x56`` to let the machine
+        leave its post-connect transitional state before staging. On a fresh
+        connection the machine will not arm if the dose/temps/pours frames are sent
+        immediately — it needs the handshake + this settle first (verified on
+        hardware; this is the fix for the previous "loads never arm" issue).
         """
         if self._client is None or not self._client.is_connected:
             raise XBloomError("not connected")
 
         recipe.validate()
+        # frames == [a4, a6, a8, pours]; the pours opcode is chosen by build_load_frames.
         frames = build_load_frames(recipe.to_protocol_dict())
+        a4, load_frames = frames[0], frames[1:]
 
         await self._start_notify()
         try:
-            for i, frame in enumerate(frames):
-                cmd = frame[3]
-                log.info("→ load frame %d/%d (cmd=0x%02x)", i + 1, len(frames), cmd)
-                # The machine's command characteristic (ffe1) accepts ONLY a Write Command
-                # (write-without-response, ATT 0x52) — verified from the vendor app's own HCI
-                # capture, which never uses a Write Request on ffe1. A Write Request (response=True)
-                # is rejected by the firmware with GATT "Unlikely Error". The ACK arrives instead as
-                # a notification on ffe2 (echoing the command byte), which we await below.
+            # The command characteristic (ffe1) accepts ONLY a Write Command (ATT
+            # 0x52, write-without-response); ACKs and status arrive as ffe2
+            # notifications, which accumulate in self._notif_queue and are read by
+            # _drain_until_state below. We pace the writes with small fixed delays
+            # rather than round-tripping each ACK: the machine needs the frames
+            # spaced out, and consuming ACKs off the queue here would race the state
+            # wait. (Verified on hardware — this is the fix for "loads never arm".)
+            # 1. Session start + status handshake, then let the machine settle out of
+            #    its transitional post-connect state before staging.
+            log.info("→ a4 (session start) + 0x56 (handshake), then settle %.1fs", settle)
+            await self._client.write_gatt_char(CHAR_COMMAND, a4, response=False)
+            await asyncio.sleep(0.5)
+            await self._client.write_gatt_char(CHAR_COMMAND, build_status_query(), response=False)
+            await asyncio.sleep(settle)
+            # 2. Dose, temps, pours — the pours frame drives the machine to armed.
+            for i, frame in enumerate(load_frames):
+                log.info("→ load frame %d/%d (cmd=0x%02x)", i + 2, len(load_frames) + 1, frame[3])
                 await self._client.write_gatt_char(CHAR_COMMAND, frame, response=False)
-                # Wait for the echoed ACK of this command on ffe2.
-                await self._await_ack(cmd)
-            # The final 0x41 drives the machine to the armed state; confirm it.
+                await asyncio.sleep(0.4)
             armed = await self._drain_until_state(STATE_ARMED, self.ack_timeout)
             log.info("recipe loaded — machine armed (awaiting human approval)")
             return armed

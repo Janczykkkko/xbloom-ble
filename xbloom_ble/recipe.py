@@ -270,11 +270,15 @@ class Recipe:
         return round(self.total_water_ml / float(self.dose_g), 1) if self.dose_g else 0.0
 
     def to_protocol_dict(self) -> dict[str, Any]:
-        """Shape consumed by :func:`xbloom_ble.protocol.build_load_frames`."""
+        """Shape consumed by :func:`xbloom_ble.protocol.build_load_frames`.
+
+        Note: ``tail`` (the pours-frame ratio byte) is intentionally omitted — the
+        protocol layer derives it from Σ(pour ml) / dose, so it always matches the
+        recipe. The machine rejects a load whose ratio byte is inconsistent.
+        """
         return {
             "dose": int(self.dose_g),
             "grind": int(self.grind),
             "stage_temps": tuple(self.stage_temps),
-            "tail": int(self.tail),
             "pours": [p.to_protocol_dict() for p in self.pours],
         }
