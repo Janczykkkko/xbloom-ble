@@ -8,6 +8,15 @@ Conventional-Commit history — new versions are inserted below.
 
 <!-- version list -->
 
+## v1.1.0 (2026-07-07)
+
+### Features
+
+- No-grind (brew pre-ground) recipe support
+  ([#11](https://github.com/Janczykkkko/xbloom-ble/pull/11),
+  [`c2ad31b`](https://github.com/Janczykkkko/xbloom-ble/commit/c2ad31b4084ecec06bce08eb9592fc4554bc3a11))
+
+
 ## v1.0.1 (2026-07-01)
 
 ### Bug Fixes
