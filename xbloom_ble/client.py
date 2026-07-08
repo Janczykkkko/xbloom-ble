@@ -51,6 +51,9 @@ STATE_ARMED = 0x1F
 STATE_AWAITING_CONFIRM = 0x1E
 STATE_STARTING = 0x22
 STATE_BREWING = 0x3B
+# Machine-refused states (it checks water/beans right after commit, before pouring).
+STATE_NO_WATER = 0x0C
+STATE_NO_BEANS = 0x0F
 # Slot-save status states (see telemetry): 0x43 saving, 0x25 saved, 0x01 idle.
 STATE_IDLE = 0x01
 STATE_SLOTS_SAVED = 0x25
@@ -278,16 +281,19 @@ class XBloomClient:
         try:
             log.info("→ 0x42 commit (start the brew)")
             await self._client.write_gatt_char(CHAR_COMMAND, build_commit(), response=False)
-            # Does the machine auto-proceed to grinding/brewing after commit?
-            ev = await self._drain_for_any({STATE_STARTING, STATE_BREWING}, settle)
+            # After commit the machine either acts (auto-proceeds to grinding/brewing, or
+            # refuses with no-water/no-beans), or just sits in awaiting-confirm. In ANY
+            # "acted" case we must NOT send 0x46 — sending it into a running brew aborts
+            # it, and it's pointless on a refusal. Only nudge with 0x46 if it stalls.
+            acted = {STATE_STARTING, STATE_BREWING, STATE_NO_WATER, STATE_NO_BEANS}
+            ev = await self._drain_for_any(acted, settle)
             if ev is not None:
-                log.info("machine started on its own after commit (%s) — not sending 0x46",
-                         ev.state_name)
+                log.info("machine acted on commit (%s) — not sending 0x46", ev.state_name)
                 return ev
             # It stalled in awaiting-confirm — nudge it with the start frame.
             log.info("machine waiting in confirm — → 0x46 start")
             await self._client.write_gatt_char(CHAR_COMMAND, build_start(), response=False)
-            ev = await self._drain_for_any({STATE_STARTING, STATE_BREWING}, 5.0)
+            ev = await self._drain_for_any(acted, 5.0)
             if ev is not None:
                 log.info("brew started (%s)", ev.state_name)
                 return ev

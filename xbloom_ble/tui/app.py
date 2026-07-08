@@ -35,6 +35,7 @@ _STATE_MSG = {
     "armed": ("● armed — approve on the machine ▶", "yellow"),
     "awaiting_confirm": ("● add beans + confirm on the machine ▶", "yellow"),
     "no_beans": ("⚠ no beans on the machine", "red"),
+    "no_water": ("⚠ no water in the tank", "red"),
     "starting": ("● grinding / starting…", "cyan"),
     "brewing": ("● brewing…", "cyan"),
     "complete": ("✓ complete", "green"),
@@ -748,7 +749,8 @@ class XBloomApp(App):
             async for ev in self.controller.telemetry():
                 if not self.is_running:
                     break
-                if ev.state_name in ("awaiting_confirm", "starting", "brewing", "no_beans"):
+                if ev.state_name in ("awaiting_confirm", "starting", "brewing",
+                                     "no_beans", "no_water"):
                     brew_began = True
                 if ev.state_name == "brewing" or ev.water_g is not None:
                     saw_progress = True
@@ -766,12 +768,13 @@ class XBloomApp(App):
                     self._water.append(ev.water_g)
                     self._coffee.append(ev.coffee_g or 0.0)
                     self._replot()
-                if ev.state_name == "no_beans":
-                    # The machine found no beans and drops the staged recipe — abort:
-                    # cancel it back to idle and stop streaming (don't sit waiting).
-                    self._log("✗ no beans — aborting; add beans and brew again", "red")
-                    self._brew_status(f"{head}\n[red]✗ no beans — brew aborted "
-                                      "(add beans, then brew again)[/]")
+                if ev.state_name in ("no_beans", "no_water"):
+                    # The machine refuses (no beans / no water) and drops the staged
+                    # recipe — abort: cancel back to idle and stop (don't sit waiting).
+                    what = "beans" if ev.state_name == "no_beans" else "water"
+                    self._log(f"✗ no {what} — aborting; add {what} and brew again", "red")
+                    self._brew_status(f"{head}\n[red]✗ no {what} — brew aborted "
+                                      f"(add {what}, then brew again)[/]")
                     try:
                         await self.controller.cancel()
                     except Exception:  # noqa: BLE001
