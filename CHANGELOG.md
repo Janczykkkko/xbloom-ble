@@ -8,6 +8,15 @@ Conventional-Commit history — new versions are inserted below.
 
 <!-- version list -->
 
+## v2.2.0 (2026-07-08)
+
+### Features
+
+- **config**: Persistent config/data dirs + first-run init + cloud sync-all
+  ([#17](https://github.com/Janczykkkko/xbloom-ble/pull/17),
+  [`661711f`](https://github.com/Janczykkkko/xbloom-ble/commit/661711f4e63395e5debaeefa281b125952ff6b16))
+
+
 ## v2.1.1 (2026-07-08)
 
 ### Bug Fixes
