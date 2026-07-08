@@ -225,9 +225,10 @@ xbloom tui --recipes ./recipes            # or just: xbloom
 
 Run it against the simulator (no machine) with `--demo` to explore it safely.
 
-| Recipes + detail sidebar | Brew confirm gate | Brew history + telemetry |
-|---|---|---|
-| ![Recipes list with a live detail sidebar](docs/img/tui-recipes.jpg) | ![The 3-way brew confirm gate: Cancel / Load only / Start](docs/img/tui-brew-gate.jpg) | ![History tab with a saved brew's water/coffee curve](docs/img/tui-history.jpg) |
+|  |  |
+|---|---|
+| Recipes + detail sidebar<br>![Recipes list with a live detail sidebar](docs/img/tui-recipes.jpg) | The recipe editor<br>![The slim recipe editor: aligned fields, pattern selector, agit toggle](docs/img/tui-editor.jpg) |
+| Brew confirm gate<br>![The 3-way brew confirm gate: Cancel / Load only / Start](docs/img/tui-brew-gate.jpg) | Brew history + telemetry<br>![History tab with a saved brew's water/coffee curve](docs/img/tui-history.jpg) |
 
 ### Program the dial presets (save-slots)
 
