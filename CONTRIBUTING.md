@@ -10,6 +10,8 @@ place.
   [No personal data](#no-personal-data-in-anything-you-share)).
 - **Want to add a feature?** Skim [Architecture](#architecture) and the
   [Safety invariant](#-the-safety-invariant--it-must-be-preserved) first, then open a PR.
+  See [ROADMAP.md](ROADMAP.md) for where the project is heading (cross-platform, first-run
+  UX, richer telemetry).
 - **Have a different firmware / hardware revision?** A clean BLE capture is the single
   most valuable thing you can contribute — see [`docs/REVERSE-ENGINEERING.md`](docs/REVERSE-ENGINEERING.md).
 
