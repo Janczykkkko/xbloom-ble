@@ -5,8 +5,6 @@
 
 from __future__ import annotations
 
-DEFAULT_RECIPES_DIR = "~/.xbloom/recipes"
-
 
 def run_tui(
     *,
@@ -16,7 +14,17 @@ def run_tui(
     auto_brew: bool = False,
     debug: bool = False,
 ) -> int:
-    """Build the store + controller and run the app. Returns a process exit code."""
+    """Build the store + controller and run the app. Returns a process exit code.
+
+    Persistence resolution:
+
+    * **``--recipes DIR`` given** → recipes live there, and the dial-preset + history files stay
+      *adjacent* (``DIR/../xbloom-{slots,history}.json``) — the long-standing layout, kept so
+      external drivers that point at their own generated recipe dir don't break.
+    * **not given** → recipes come from the config (or the per-user data dir), and slots/history/
+      token go to the per-user **state** dir. The saved machine address (config) is used when none
+      is passed, so later launches skip the scan.
+    """
     try:
         from .app import XBloomApp
     except ModuleNotFoundError as exc:  # textual not installed
@@ -27,11 +35,26 @@ def run_tui(
         )
         return 1
 
+    from .. import config as cfgmod
+    from .. import paths
     from .controller import FakeController, RealController
+    from .history import HistoryStore
+    from .slots import SlotStore
     from .store import RecipeStore
 
-    store = RecipeStore(recipes_dir or DEFAULT_RECIPES_DIR)
+    if recipes_dir:
+        store = RecipeStore(recipes_dir)
+        slots = SlotStore(store.dir.parent / "xbloom-slots.json")
+        history = HistoryStore(store.dir.parent / "xbloom-history.json")
+    else:
+        cfg = cfgmod.load()
+        store = RecipeStore(cfg.resolved_recipes_dir)
+        slots = SlotStore(paths.slots_file())
+        history = HistoryStore(paths.history_file())
+        address = address or cfg.address or None
     store.ensure()
+
     controller = FakeController(speed=0.2, auto_start=1.5) if demo else RealController(address)
-    XBloomApp(store, controller, auto_brew=auto_brew, debug=debug).run()
+    XBloomApp(store, controller, auto_brew=auto_brew, debug=debug,
+              history=history, slots=slots).run()
     return 0

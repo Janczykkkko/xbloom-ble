@@ -341,6 +341,9 @@ def _cmd_cloud(args) -> int:
                 print(f"  Ratio: 1:{rv.get('grandWater', '?')}")
                 print(f"  Grind: {rv.get('grinderSize', '?')}")
             return 0
+
+        if action == "sync-all":
+            return _cloud_sync_all(client, args)
     except XBloomCloudError as exc:
         print(f"ERROR: {exc}")
         return 3
@@ -348,6 +351,171 @@ def _cmd_cloud(args) -> int:
         print(f"ERROR: {exc}")
         return 3
     return 2
+
+
+def _cloud_sync_all(client, args) -> int:
+    """Sync every local recipe to the cloud account. By default under each recipe's OWN name —
+    overwriting an identically-named account recipe (with a ⚠ warning per overwrite). ``--managed``
+    uses the safe ``AUTO …`` prefix instead (never touches your own recipes)."""
+    from . import config as cfgmod
+    from .cloud import MANAGED_PREFIX
+    from .tui.store import RecipeStore
+
+    rdir = args.dir or str(cfgmod.load().resolved_recipes_dir)
+    entries = [e for e in RecipeStore(rdir).list() if e.ok]
+    if not entries:
+        print(f"No valid recipes found in {rdir}.")
+        return 0
+    prefix = MANAGED_PREFIX if args.managed else ""
+    mode = (f"prefixed '{MANAGED_PREFIX}…'" if prefix
+            else "under their own names (overwrites same-named)")
+    print(f"Syncing {len(entries)} recipe(s) from {rdir} — {mode}:")
+    added = updated = 0
+    for e in entries:
+        resp, act = client.sync_recipe(e.recipe, prefix=prefix, cup_type=args.cup)
+        name = (prefix + e.recipe.name) if prefix else e.recipe.name
+        if act == "updated":
+            updated += 1
+            print(f"  ⚠ overwrote existing '{name}' (tableId={resp.get('tableId', '?')})")
+        else:
+            added += 1
+            print(f"  ✓ added '{name}'")
+    print(f"Done: {added} added, {updated} overwritten.")
+    return 0
+
+
+def _cmd_init(args) -> int:
+    """First-run setup: pair the machine (save its address), optionally log in to the cloud, and
+    write the config. Interactive on a TTY; on a non-TTY / CI it uses args + env only."""
+    import getpass
+    import os
+
+    from . import config as cfgmod
+    from . import paths
+
+    interactive = sys.stdin.isatty() and sys.stdout.isatty() and not os.environ.get("CI")
+    cfg = cfgmod.load()
+    print(f"xBloom setup — writes {paths.config_file()}  (re-run anytime; nothing is wiped)\n")
+
+    # 1) machine address — arg / env / scan-and-pick / keep existing
+    addr = args.address or os.environ.get("XBLOOM_ADDRESS") or cfg.address
+    if not addr and not args.no_scan and interactive:
+        from .client import scan
+        print("1) Scanning for xBloom machines (8 s)…")
+        try:
+            devices = asyncio.run(scan(timeout=8.0))
+        except Exception as exc:  # noqa: BLE001
+            print(f"   scan failed ({exc}); set --address later.")
+            devices = []
+        for i, d in enumerate(devices, 1):
+            print(f"   [{i}] {d.address}  {getattr(d, 'name', None) or '?'}")
+        if devices:
+            choice = input("   pick a machine [1] (Enter to skip): ").strip() or "1"
+            if choice.isdigit() and 1 <= int(choice) <= len(devices):
+                addr = devices[int(choice) - 1].address
+        else:
+            print("   none found (machine on? phone app closed?) — set later with --address.")
+    if addr:
+        cfg.address = addr
+        print(f"   ✓ machine address: {addr}\n")
+
+    # 2) recipe store
+    rdir = cfg.resolved_recipes_dir
+    paths.ensure_dir(rdir)
+    print(f"2) Recipe store: {rdir}\n")
+
+    # 3) optional cloud login (skippable; never blocks BLE use)
+    if not args.no_cloud and interactive:
+        prompt = "3) Link your xBloom app account for cloud recipe sync? [y/N]: "
+        ans = input(prompt).strip().lower()
+        if ans in ("y", "yes"):
+            from .cloud import XBloomCloud
+            email = args.email or os.environ.get("XBLOOM_EMAIL") or input("   Email: ").strip()
+            password = os.environ.get("XBLOOM_PASSWORD") or getpass.getpass("   Password: ")
+            try:
+                XBloomCloud(email=email, password=password).login()
+                cfg.cloud_email = email
+                print("   ✓ logged in — token cached (your password is NOT stored).\n")
+            except Exception as exc:  # noqa: BLE001
+                print(f"   ✗ login failed: {exc} — skip for now, try `xbloom cloud login` later.\n")
+
+    cfgmod.save(cfg)
+    print(f"✓ Setup saved to {paths.config_file()}.")
+    print("  Next:  xbloom tui   ·   xbloom doctor   ·   xbloom cloud sync-all")
+    return 0
+
+
+def _cmd_config(args) -> int:
+    from . import config as cfgmod
+    from . import paths
+
+    if args.config_action == "path":
+        print(paths.config_file())
+        return 0
+    cfg = cfgmod.load()
+    exists = " (exists)" if cfgmod.exists() else " (not created — run `xbloom init`)"
+    print(f"config file : {paths.config_file()}{exists}")
+    print(f"recipes dir : {cfg.resolved_recipes_dir}")
+    print(f"history     : {paths.history_file()}")
+    print(f"slots       : {paths.slots_file()}")
+    tok = paths.token_file()
+    print(f"cloud token : {tok}  ({'cached' if tok.exists() else 'not logged in'})")
+    print(f"address     : {cfg.address or '(none — scans on launch)'}")
+    print(f"cloud email : {cfg.cloud_email or '(not set)'}")
+    print(f"scale on    : {cfg.scale_on}")
+    return 0
+
+
+def _cmd_doctor(args) -> int:
+    import os
+
+    from . import config as cfgmod
+    from . import paths
+
+    cfg = cfgmod.load()
+    ok = True
+
+    def check(good, msg):
+        nonlocal ok
+        ok = ok and good
+        print(f"  {'✓' if good else '✗'} {msg}")
+
+    print("xbloom doctor —")
+    check(True, f"config: {paths.config_file()}"
+          + ("" if cfgmod.exists() else "  (no config yet — run `xbloom init`)"))
+    try:
+        paths.ensure_dir(cfg.resolved_recipes_dir)
+        writable = os.access(cfg.resolved_recipes_dir, os.W_OK)
+    except OSError:
+        writable = False
+    check(writable, f"recipe store writable: {cfg.resolved_recipes_dir}")
+    tok = paths.token_file()
+    if tok.exists():
+        warn = paths.tighten_if_loose(tok)
+        check(True, f"cloud token cached ({tok})" + (f" — {warn}" if warn else " — perms OK"))
+    else:
+        check(True, "cloud token: not logged in (optional)")
+    try:
+        import textual  # noqa: F401
+        check(True, "TUI deps installed")
+    except ImportError:
+        check(False, "TUI deps missing — pip install 'xbloom-ble[tui]'")
+    try:
+        import cryptography  # noqa: F401
+        check(True, "cloud deps installed")
+    except ImportError:
+        check(False, "cloud deps missing — pip install 'xbloom-ble[cloud]'")
+    if getattr(args, "scan", False):
+        from .client import scan
+        try:
+            found = asyncio.run(scan(timeout=6.0))
+            check(bool(found),
+                  f"machine reachable ({len(found)} found)" if found
+                  else "no machine found (on? phone app closed?)")
+        except Exception as exc:  # noqa: BLE001
+            check(False, f"scan failed: {exc}")
+    print("  →", "all good" if ok else "some checks failed (see above)")
+    return 0 if ok else 1
 
 
 # ---------------------------------------------------------------------------
@@ -377,6 +545,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     s_scan = sub.add_parser("scan", help="discover xBloom machines")
     s_scan.add_argument("--timeout", type=float, default=8.0, help="scan seconds (default 8)")
+
+    s_init = sub.add_parser(
+        "init", help="first-run setup — pair the machine, optional cloud login, write config")
+    s_init.add_argument("--address", help="use this BLE address (skip scanning)")
+    s_init.add_argument("--email", help="cloud account email (or $XBLOOM_EMAIL)")
+    s_init.add_argument("--no-scan", action="store_true", help="don't scan for a machine")
+    s_init.add_argument("--no-cloud", action="store_true", help="skip the cloud-login step")
+
+    s_config = sub.add_parser("config", help="show the config file location / current settings")
+    config_sub = s_config.add_subparsers(dest="config_action", required=True)
+    config_sub.add_parser("path", help="print the config file path")
+    config_sub.add_parser("show", help="print the resolved config + data/state locations")
+
+    s_doctor = sub.add_parser("doctor", help="check config, dirs, deps and the cached token")
+    s_doctor.add_argument("--scan", action="store_true", help="also scan for the machine")
 
     s_val = sub.add_parser("validate", help="validate a recipe YAML file")
     s_val.add_argument("recipe", help="path to a recipe YAML, or an http(s):// URL")
@@ -456,6 +639,15 @@ def build_parser() -> argparse.ArgumentParser:
     c_fetch = cloud_sub.add_parser("fetch", help="fetch a publicly shared recipe (no auth)")
     c_fetch.add_argument("share", help="share id or share URL")
     c_fetch.add_argument("--json", action="store_true", help="print raw JSON")
+
+    c_syncall = cloud_sub.add_parser(
+        "sync-all",
+        help="sync ALL local recipes to your account (overwrites same-named — warns)")
+    c_syncall.add_argument("--dir", help="recipe directory (default: your config's recipe store)")
+    c_syncall.add_argument("--cup", default="omni", help="cup type (default omni)")
+    c_syncall.add_argument(
+        "--managed", action="store_true",
+        help="use the safe 'AUTO …' prefix instead (never overwrite your own recipes)")
     return p
 
 
@@ -487,6 +679,12 @@ def main(argv: list[str] | None = None) -> int:
         except KeyboardInterrupt:
             print("\nInterrupted.")
             return 130
+    if args.command == "init":
+        return _cmd_init(args)
+    if args.command == "config":
+        return _cmd_config(args)
+    if args.command == "doctor":
+        return _cmd_doctor(args)
     if args.command == "cloud":
         return _cmd_cloud(args)
     parser.error("unknown command")  # tui/None handled above

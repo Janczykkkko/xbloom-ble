@@ -285,6 +285,53 @@ This uses a community-reverse-engineered, unofficial API (it may break, and it
 touches your real account) — see [`cloud.py`](xbloom_ble/cloud.py) for the
 mechanics (RSA-encrypted bodies, endpoints, field schema).
 
+#### Sync your whole recipe library
+
+`cloud sync-all` pushes **every** recipe in your store to the account in one go — handy alongside
+programming the machine, so the phone app and the machine agree:
+
+```console
+$ xbloom cloud sync-all
+Syncing 6 recipe(s) from ~/.local/share/xbloom/recipes — under their own names (overwrites same-named):
+  ✓ added 'Kolumbia El Recreo'
+  ⚠ overwrote existing 'Rwanda Cyato' (tableId=903)
+  …
+Done: 5 added, 1 overwritten.
+```
+
+By default recipes sync **under their own names** and an identically-named account recipe is
+**overwritten (with a ⚠ warning)**. Pass `--managed` to instead prefix them `AUTO …` and never
+touch a recipe you made by hand. `--dir` picks a different recipe directory.
+
+---
+
+## Configuration, data & first run
+
+Run `xbloom init` once — it pairs the machine (scan → pick → **saves the address** so later launches
+skip the scan), optionally logs in to your cloud account (the exchanged **token** is cached, your
+password is never stored), and writes a small config. It's re-runnable and never wipes anything; on a
+non-interactive shell (CI) it reads `--address` / `XBLOOM_EMAIL` / `XBLOOM_PASSWORD` and skips prompts.
+
+```console
+$ xbloom init            # guided setup
+$ xbloom config show     # where everything lives + current settings
+$ xbloom config path     # just the config file path
+$ xbloom doctor          # check config, dirs, deps, token (add --scan to ping the machine)
+```
+
+Files land in the OS-native per-user locations (via `platformdirs`), split by purpose:
+
+| What | Location (Linux · macOS · Windows) |
+|---|---|
+| **config** (`config.yaml`) | `~/.config/xbloom/` · `~/Library/Preferences/xbloom/` · `%APPDATA%\xbloom\` |
+| **recipes** (`recipes/`) | `~/.local/share/xbloom/` · `~/Library/Application Support/xbloom/` · `%LOCALAPPDATA%\xbloom\` |
+| **state** — brew `history.json`, dial `slots.json`, cached `cloud-auth.json` (`0600`) | `~/.local/state/xbloom/` · `~/Library/Application Support/xbloom/` · `%LOCALAPPDATA%\xbloom\` |
+
+Overrides (checked first, every OS): `XBLOOM_CONFIG_DIR` / `XBLOOM_DATA_DIR` / `XBLOOM_STATE_DIR`.
+On macOS, `XDG_CONFIG_HOME` / `XDG_DATA_HOME` / `XDG_STATE_HOME` are honored when set. Passing
+`xbloom tui --recipes DIR` keeps the old behaviour (slots/history sit next to that directory), so an
+external generator that owns its recipe dir is unaffected.
+
 ---
 
 ## Recipe format

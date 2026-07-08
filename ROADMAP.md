@@ -17,22 +17,27 @@ The library is developed and tested on **Linux (BlueZ)**. `bleak` also supports 
 
 ## First-run experience
 
-Today a fresh user gets an empty recipes dir, no saved machine, and no config. Smooth this out:
-
-- [ ] **Config file** (`~/.xbloom/config.toml`): saved machine address, recipes dir,
-      default scale-on, units.
-- [ ] **Pair once:** scan → pick machine → save the address (no re-scan every launch).
+- [x] **Config file** (`config.yaml`): saved machine address, recipes-dir override, default
+      scale-on. (`xbloom config show`/`path`.)
+- [x] **Pair once:** `xbloom init` scans → pick machine → saves the address (later launches skip
+      the scan).
+- [x] **Cloud login in setup** — `xbloom init` (and `xbloom cloud login`) exchange email+password
+      for a token cached `0600` in the state dir; the password is never stored.
+- [x] **`xbloom doctor`** — checks config, dirs, deps, token perms (and `--scan` the machine).
 - [ ] **Seed recipes** on first run — bundle a few starters, and/or offer "import from your
       xBloom app account" (the cloud client already exists).
-- [ ] **Friendly empty state** in the TUI ("No recipes yet — `n` to create, `i` to import").
+- [ ] **Textual first-run wizard** — auto-offer `init` from the TUI when no config exists on a TTY
+      (today `init` is CLI-only; the TUI runs zero-config). Friendly empty state ("`n` to create,
+      `i` to import").
 - [ ] **Polish the recipe editor** — the grid layout is cramped/rough (misaligned labels,
       tiny per-pour cells); make it a cleaner, more legible form.
 
 ## Persistence
 
-- [ ] Move history/slots/config to a **stable per-user data dir** (via `platformdirs`:
-      `~/.local/share/xbloom/`, `~/Library/Application Support/xbloom/`, `%APPDATA%\xbloom\`)
-      instead of deriving the location from the recipes-dir parent. Migrate existing files.
+- [x] Move recipes/history/slots/config/token to **stable per-user dirs** via `platformdirs`
+      (config / data / state, `XBLOOM_*_DIR` overrides, XDG-on-macOS), instead of deriving from the
+      recipes-dir parent. The cached cloud token migrates from the pre-2.2 `~/.config/xbloom-ble/`
+      location. `--recipes DIR` still keeps slots/history adjacent (external-generator compat).
 
 ## Protocol / telemetry
 
