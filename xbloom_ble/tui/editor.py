@@ -12,22 +12,111 @@ from collections.abc import Callable
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Button, Checkbox, Input, Label, Static
+from textual.widgets import Checkbox, Input, Label, Static
 
 from ..recipe import Recipe, RecipeError
 from .store import RecipeStore
+
+
+class ClickCell(Static):
+    """A slim, clickable 'button' rendered as a ``Static``.
+
+    A real Textual ``Button`` won't show its label in a height-1 row (it needs ~3 rows
+    and renders as a blank coloured bar), so all the editor's actions are these instead:
+    they render their text on a single row. The ``id`` names the action (``add`` /
+    ``save`` / ``cancel`` / a pour's ``remove``); :meth:`EditorView._activate` routes it.
+    """
+
+    def on_click(self) -> None:
+        try:
+            self.screen.query_one(EditorView)._activate(self)
+        except Exception:
+            pass
+
+
+class AgitCell(Static):
+    """A slim per-pour agitation toggle (``✓`` = on).
+
+    Agitation is on/off in the protocol — the machine agitates *during* that pour (the
+    spiral motion); there is no separate pre-/post-pour timing to send, so this is a
+    plain toggle. A ``Static`` (not a ``Checkbox``) so it renders cleanly in a height-1
+    row — a Checkbox's switch glyph gets clipped there.
+    """
+
+    def __init__(self, on: bool = False, **kwargs) -> None:
+        self._on = bool(on)
+        super().__init__(self._glyph(), **kwargs)   # initial content (never None → renders)
+
+    def _glyph(self) -> str:
+        return "[green]✓[/]" if self._on else "[dim]·[/]"
+
+    @property
+    def value(self) -> bool:
+        return self._on
+
+    def toggle(self) -> None:
+        self._on = not self._on
+        self.update(self._glyph())
+
+    def on_click(self) -> None:
+        self.toggle()
+        try:
+            ev = self.screen.query_one(EditorView)
+            ev._mark_dirty()
+            ev._revalidate()
+        except Exception:
+            pass
+
+
+class PatternCell(Static):
+    """Slim pattern selector — cycles the three valid pour patterns on click / Enter
+    (spiral → ring → center). There are only three values and a real dropdown overlay
+    fights the height-1 rows, so a compact cycler fits the editor's slim grid.
+    """
+
+    PATTERNS = ("spiral", "ring", "center")
+
+    def __init__(self, value: str = "spiral", **kwargs) -> None:
+        self._val = value if value in self.PATTERNS else "spiral"
+        super().__init__(self._val, **kwargs)
+
+    @property
+    def value(self) -> str:
+        return self._val
+
+    def cycle(self) -> None:
+        self._val = self.PATTERNS[(self.PATTERNS.index(self._val) + 1) % len(self.PATTERNS)]
+        self.update(self._val)
+
+    def on_click(self) -> None:
+        self.cycle()
+        try:
+            ev = self.screen.query_one(EditorView)
+            ev._mark_dirty()
+            ev._revalidate()
+        except Exception:
+            pass
 
 
 class PourRow(Horizontal):
     """One editable pour: ml · temp · pattern · pause · rpm · flow · agitate · ✕."""
 
     DEFAULT_CSS = """
-    PourRow { height: 3; }
-    PourRow Input { width: 9; }
-    PourRow #pattern { width: 11; }
-    PourRow .plabel { width: 3; content-align: right middle; color: $text-muted; }
-    PourRow Checkbox { width: 8; }
-    PourRow Button { width: 5; }
+    PourRow { height: 1; }
+    PourRow > .plabel { width: 3; content-align: right middle; color: $text-muted; }
+    PourRow Input {
+        width: 8; height: 1; border: none; background: #101010; padding: 0 1; margin-right: 1;
+    }
+    PourRow Input:focus { background: #16213e; }
+    PourRow #pattern {
+        width: 11; height: 1; background: #101010; content-align: left middle;
+        padding: 0 1; margin-right: 1;
+    }
+    PourRow #pattern:hover { background: #16213e; }
+    PourRow #agitation { width: 9; height: 1; content-align: left middle; padding-left: 1; }
+    PourRow #remove { width: 4; height: 1; color: $error; content-align: center middle; }
+    PourRow #remove:hover { background: $error 30%; text-style: bold; }
+    PourRow .navsel { background: $accent; text-style: bold; }
     """
 
     def __init__(self, idx: int, pour: dict | None = None) -> None:
@@ -48,12 +137,12 @@ class PourRow(Horizontal):
         yield Label(f"{self._idx}", classes="plabel")
         yield Input(self._init["ml"], id="ml", placeholder="ml", type="integer")
         yield Input(self._init["temp_c"], id="temp_c", placeholder="°C", type="integer")
-        yield Input(self._init["pattern"], id="pattern", placeholder="spiral/ring/center")
+        yield PatternCell(self._init["pattern"], id="pattern")
         yield Input(self._init["pause_s"], id="pause_s", placeholder="pause", type="integer")
         yield Input(self._init["rpm"], id="rpm", placeholder="rpm", type="integer")
         yield Input(self._init["flow_ml_s"], id="flow_ml_s", placeholder="flow")
-        yield Checkbox("agit", value=self._init["agitation"], id="agitation")
-        yield Button("✕", id="remove", variant="error")
+        yield AgitCell(self._init["agitation"], id="agitation")   # ✓ = agitate this pour
+        yield ClickCell("✕", id="remove")
 
     def value(self) -> dict:
         def num(wid, cast, default):
@@ -73,13 +162,13 @@ class PourRow(Horizontal):
 
     def _patt(self) -> str:
         try:
-            return self.query_one("#pattern", Input).value.strip() or "spiral"
+            return self.query_one("#pattern", PatternCell).value
         except Exception:
             return "spiral"
 
     def _agit(self) -> bool:
         try:
-            return self.query_one("#agitation", Checkbox).value
+            return self.query_one("#agitation", AgitCell).value
         except Exception:
             return False
 
@@ -89,10 +178,34 @@ class EditorView(VerticalScroll):
 
     DEFAULT_CSS = """
     EditorView { padding: 1 2; background: #000000; }
-    EditorView .field { height: 3; }
-    EditorView .flabel { width: 16; content-align: left middle; color: $text-muted; }
+    EditorView #etitle { text-style: bold; color: $primary; padding: 0 0 1 0; }
+    EditorView .field { height: 1; margin-bottom: 1; }
+    EditorView .flabel { width: 14; content-align: left middle; color: $text-muted; }
+    EditorView Input {
+        height: 1; border: none; background: #101010; padding: 0 1;
+    }
+    EditorView Input:focus { background: #16213e; }
+    EditorView Input.-invalid { background: #2a1010; }
     EditorView #name { width: 40; }
-    EditorView .num { width: 12; }
+    EditorView .num { width: 8; margin-right: 2; }
+    EditorView Checkbox { height: 1; border: none; background: transparent; padding: 0; }
+    /* Slim clickable 'buttons' (Static — a real height-1 Button renders as a blank bar). */
+    EditorView .cbtn {
+        width: auto; height: 1; padding: 0 2; margin: 0 2 0 0; text-style: bold;
+        color: $text; background: #2a2a33; content-align: center middle;
+    }
+    EditorView .cbtn.success { background: $success; color: #06210f; }
+    EditorView .cbtn.primary { background: $primary; color: $text; }
+    EditorView .cbtn:hover { text-style: bold reverse; }
+    EditorView .cbtn.disabled { background: #1a1a1a; color: $text-disabled; }
+    EditorView .cbtn.navsel { background: $accent; color: $text; }
+    EditorView .actions { height: auto; padding: 1 0 0 0; }
+    /* Pours: a slim header row the editable cells align under (like the recipe table). */
+    #ptitle { text-style: bold; padding: 1 0 0 0; }
+    #phead { height: 1; color: $text-muted; text-style: bold; }
+    #phead > .plabel { width: 3; }
+    #phead > .pcol { width: 9; padding-left: 1; }
+    #phead > .pcol.wide { width: 12; }
     #err { height: auto; color: $error; padding: 1 0; }
     #summary { color: $text-muted; padding: 0 0 1 0; }
     #pours { height: auto; }
@@ -103,7 +216,8 @@ class EditorView(VerticalScroll):
         self.store = store
         self.on_done = on_done
         self._path = None
-        self._orig = None       # the recipe being edited (to preserve its metadata)
+        self._orig = None       # the source recipe (to preserve its metadata)
+        self._new = False       # a create/clone (always saves; never "no changes")
 
     def compose(self) -> ComposeResult:
         yield Static("✎ Recipe editor", id="etitle")
@@ -123,20 +237,38 @@ class EditorView(VerticalScroll):
             yield Input(id="t1", classes="num", type="integer")
             yield Input(id="t2", classes="num", type="integer")
         yield Static("Pours", id="ptitle")
+        with Horizontal(id="phead"):
+            yield Label("", classes="plabel")
+            yield Label("ml", classes="pcol")
+            yield Label("°C", classes="pcol")
+            yield Label("pattern", classes="pcol wide")
+            yield Label("pause", classes="pcol")
+            yield Label("rpm", classes="pcol")
+            yield Label("flow", classes="pcol")
+            yield Label("agit", classes="pcol")
         yield Vertical(id="pours")
-        yield Button("+ add pour", id="add", variant="primary")
+        yield ClickCell("+ add pour", id="add", classes="cbtn primary")
         yield Static("", id="summary")
         yield Static("", id="err")
-        with Horizontal(classes="field"):
-            yield Button("Save", id="save", variant="success")
-            yield Button("Cancel", id="cancel")
+        with Horizontal(classes="actions"):
+            yield ClickCell("Save", id="save", classes="cbtn success")
+            yield ClickCell("Cancel", id="cancel", classes="cbtn")
 
-    def load(self, recipe: Recipe | None, path=None) -> None:
-        """Populate from a recipe (or blank defaults for a new one)."""
-        self._path = path
+    def load(self, recipe: Recipe | None, path=None, clone: bool = False) -> None:
+        """Populate from a recipe (or blank defaults for a new one).
+
+        ``clone`` loads an existing recipe's values but as a brand-new recipe: no path
+        (saves to a fresh file), name suffixed " (copy)", and it always counts as
+        changed. The source's metadata is still carried across via ``_orig``.
+        """
+        self._path = None if clone else path
         self._orig = recipe
-        self.query_one("#etitle", Static).update("✎ Edit recipe" if recipe else "✎ New recipe")
-        self.query_one("#name", Input).value = recipe.name if recipe else ""
+        self._new = recipe is None or clone
+        title = "✎ New recipe" if recipe is None else (
+            "✎ New recipe (clone)" if clone else "✎ Edit recipe")
+        self.query_one("#etitle", Static).update(title)
+        name = "" if recipe is None else (f"{recipe.name} (copy)" if clone else recipe.name)
+        self.query_one("#name", Input).value = name
         self.query_one("#dose_g", Input).value = str(recipe.dose_g) if recipe else "16"
         if recipe is None:
             grind_val = "55"                                # sensible default for a NEW recipe
@@ -203,13 +335,14 @@ class EditorView(VerticalScroll):
         self.query_one("#summary", Static).update(
             f"Σ pours = {total} ml{exp} · {len(data['pours'])} pours"
         )
+        save = self.query_one("#save", ClickCell)
         try:
             self._build()
             self.query_one("#err", Static).update("[green]✓ valid[/]")
-            self.query_one("#save", Button).disabled = False
+            save.remove_class("disabled")
         except RecipeError as exc:
             self.query_one("#err", Static).update(f"[$error]⚠ {exc}[/]")
-            self.query_one("#save", Button).disabled = True
+            save.add_class("disabled")
 
     def on_input_changed(self, _event) -> None:
         self._revalidate()
@@ -219,20 +352,44 @@ class EditorView(VerticalScroll):
         self.query_one("#grind", Input).disabled = self.query_one("#no_grind", Checkbox).value
         self._revalidate()
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        bid = event.button.id
-        if bid == "add":
+    def _activate(self, cell) -> None:
+        """Route a ClickCell action: add pour / remove pour / save / cancel."""
+        cid = cell.id
+        if cid == "add":
             n = len(self.query(PourRow)) + 1
             self.query_one("#pours", Vertical).mount(PourRow(n, {"ml": 60, "pause_s": 5}))
+            self._mark_dirty()
             self._revalidate()
-        elif bid == "remove":
-            event.button.parent.remove()
-            self._renumber()
-            self.call_after_refresh(self._revalidate)
-        elif bid == "cancel":
+        elif cid == "remove":
+            self.remove_pour(cell.parent)
+        elif cid == "save":
+            fn = getattr(self.screen, "action_save", None)
+            (fn or self.save)()
+        elif cid == "cancel":
             self.on_done(False)
-        elif bid == "save":
-            self.save()
+
+    def remove_pour(self, row) -> None:
+        """Delete a pour row (called by its ✕ cell), then renumber + revalidate."""
+        if not isinstance(row, PourRow):
+            return
+        row.remove()
+        self._renumber()
+        self._mark_dirty()
+        self.call_after_refresh(self._revalidate)
+
+    def _mark_dirty(self) -> None:
+        fn = getattr(self.screen, "_mark_dirty", None)
+        if callable(fn):
+            fn()
+
+    def is_unchanged(self) -> bool:
+        """True if the form still matches the recipe it opened (nothing was edited)."""
+        if self._new or self._orig is None:   # a create/clone always saves
+            return False
+        try:
+            return self._build().to_dict() == self._orig.to_dict()
+        except RecipeError:
+            return False
 
     def save(self) -> bool:
         """Validate + persist. Returns True if saved (no-op if the recipe is invalid)."""
@@ -286,11 +443,13 @@ class EditorScreen(ModalScreen):
     .navsel { background: $accent 45%; text-style: bold; }
     """
 
-    def __init__(self, store: RecipeStore, recipe: Recipe | None, path) -> None:
+    def __init__(self, store: RecipeStore, recipe: Recipe | None, path,
+                 clone: bool = False) -> None:
         super().__init__()
         self._store = store
         self._recipe = recipe
         self._path = path
+        self._clone = clone
         self._dirty = False
         self._loaded = False
         self._escape_armed = False
@@ -301,7 +460,7 @@ class EditorScreen(ModalScreen):
         yield EditorView(self._store, self._done)
 
     def on_mount(self) -> None:
-        self.query_one(EditorView).load(self._recipe, self._path)
+        self.query_one(EditorView).load(self._recipe, self._path, clone=self._clone)
         self.call_after_refresh(self._start_nav)
 
     def _start_nav(self) -> None:
@@ -350,8 +509,8 @@ class EditorScreen(ModalScreen):
 
     def _enter_edit(self) -> None:
         w = self._cur_widget()
-        if isinstance(w, Button):
-            w.press()                          # add pour / remove / save / cancel
+        if isinstance(w, (ClickCell, AgitCell, PatternCell)):
+            w.on_click()                       # button / toggle agit / cycle pattern
             self.call_after_refresh(self._highlight)   # grid may have changed
         elif isinstance(w, Checkbox):
             w.value = not w.value
@@ -399,8 +558,17 @@ class EditorScreen(ModalScreen):
         else:
             self.action_cancel()
 
+    def _mark_dirty(self) -> None:
+        self._dirty = True
+        self._escape_armed = False
+
     def action_save(self) -> None:
-        if not self.query_one(EditorView).save():
+        ev = self.query_one(EditorView)
+        if ev.is_unchanged():
+            self.notify("no changes — nothing to save", severity="information")
+            self.dismiss(False)
+            return
+        if not ev.save():
             self.app.bell()
             self.notify("recipe is invalid — fix the errors before saving", severity="warning")
 

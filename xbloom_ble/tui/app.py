@@ -248,6 +248,7 @@ class XBloomApp(App):
         Binding("c", "cancel", "cancel"),
         Binding("e", "edit", "edit"),
         Binding("n", "new", "new"),
+        Binding("C", "clone", "clone", show=False),
         Binding("d", "delete", "delete"),
         Binding("1", "assign_a", "→A", show=False),
         Binding("2", "assign_b", "→B", show=False),
@@ -431,7 +432,8 @@ class XBloomApp(App):
         })
         keys = {
             "recipes": [
-                ("enter", "brew ▶"), ("e", "edit"), ("n", "new"), ("1/2/3", "→ slot"),
+                ("enter", "brew ▶"), ("e", "edit"), ("n", "new"), ("C", "clone"),
+                ("1/2/3", "→ slot"),
                 ("p", "push slots"), ("/", "filter"), ("i", "import"), ("d", "delete"),
                 ("tab", "next tab"), ("h", "help"), ("q", "quit"),
             ],
@@ -577,6 +579,15 @@ class XBloomApp(App):
     def action_new(self) -> None:
         self._log("new recipe")
         self.push_screen(EditorScreen(self.store, None, None), self._editor_done)
+
+    def action_clone(self) -> None:
+        entry = self._current_entry()
+        recipe = entry.recipe if entry and entry.ok else None
+        if recipe is None:
+            self._notice("nothing to clone here")
+            return
+        self._log(f"cloning {recipe.name}")
+        self.push_screen(EditorScreen(self.store, recipe, None, clone=True), self._editor_done)
 
     def _editor_done(self, saved: bool | None) -> None:
         if saved:

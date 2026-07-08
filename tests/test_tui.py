@@ -15,14 +15,20 @@ import pytest
 pytest.importorskip("textual")
 pytest.importorskip("textual_plotext")
 
-from textual.widgets import Button, Input  # noqa: E402
+from textual.widgets import Input, Label  # noqa: E402
 
 from xbloom_ble.telemetry import StatusEvent  # noqa: E402
 from xbloom_ble.tui import app as app_mod  # noqa: E402
 from xbloom_ble.tui.app import RecipesView, XBloomApp  # noqa: E402
 from xbloom_ble.tui.confirm import ConfirmBrewScreen  # noqa: E402
 from xbloom_ble.tui.controller import FakeController, MachineController  # noqa: E402
-from xbloom_ble.tui.editor import EditorScreen, PourRow  # noqa: E402
+from xbloom_ble.tui.editor import (  # noqa: E402
+    ClickCell,
+    EditorScreen,
+    EditorView,
+    PatternCell,
+    PourRow,
+)
 from xbloom_ble.tui.history import HistoryList, HistoryStore  # noqa: E402
 from xbloom_ble.tui.slots import SlotStore  # noqa: E402
 from xbloom_ble.tui.store import RecipeStore  # noqa: E402
@@ -444,6 +450,24 @@ def test_journey_brew_streams_live_weights_and_completes_on_ready(store, tmp_pat
     assert hlist and hlist[0]["water_g"] == 240.0          # peak recorded to history
 
 
+def test_journey_editor_is_slim_with_aligned_pour_header(store):
+    """The editor uses slim (height-1) table-cell fields like the recipe picker, and a
+    pour header whose columns line up exactly with the pour cells."""
+    async def s(app, pilot):
+        ed = await open_editor(app, pilot, "e")
+        await pilot.pause(0.1)
+        heights = {i.region.height for i in ed.query(Input)}
+        head_x = [lbl.region.x for lbl in ed.query_one("#phead").query(Label)][1:7]
+        row = ed.query(PourRow).first()
+        cell_x = [row.query_one(f"#{i}").region.x
+                  for i in ("ml", "temp_c", "pattern", "pause_s", "rpm", "flow_ml_s")]
+        return heights, head_x, cell_x
+
+    heights, head_x, cell_x = drive(store, s)
+    assert heights == {1}            # every field is a slim single-row cell
+    assert head_x == cell_x          # header columns align with the pour cells
+
+
 class _RefusalController(_ScaleStreamController):
     """start() reports a no-water/no-beans refusal — the brew must abort (cancel)."""
 
@@ -586,7 +610,7 @@ def test_journey_editor_preserves_metadata_on_edit(tmp_path):
         ed = await open_editor(app, pilot, "e")
         ed.query_one("#grind", Input).value = "58"       # change one core field
         await pilot.pause(0.1)
-        ed.query_one("#save", Button).press()
+        ed.query_one("#save", ClickCell).on_click()
         await pilot.pause(0.15)
         return store.load(tmp_path / "fireworks.yaml")
     r = drive(store, s)
@@ -602,8 +626,7 @@ def test_journey_editor_validation_blocks_save(store):
         ed = await open_editor(app, pilot, "e")
         ed.query_one("#dose_g", Input).value = "99"      # dose > 18
         await pilot.pause(0.1)
-        return ed.query_one(EditorScreen).query_one("#save", Button).disabled \
-            if False else ed.query_one("#save", Button).disabled
+        return ed.query_one("#save", ClickCell).has_class("disabled")
     assert drive(store, s) is True
 
 
@@ -611,14 +634,64 @@ def test_journey_editor_add_remove_pour(store):
     async def s(app, pilot):
         ed = await open_editor(app, pilot, "e")
         before = len(ed.query(PourRow))
-        ed.query_one("#add", Button).press()
+        ed.query_one("#add", ClickCell).on_click()
         await pilot.pause(0.15)
         after_add = len(ed.query(PourRow))
-        ed.query(PourRow).last().query_one("#remove", Button).press()
+        ed.query(PourRow).last().query_one("#remove", ClickCell).on_click()
         await pilot.pause(0.15)
         return before, after_add, len(ed.query(PourRow))
     before, after_add, after_remove = drive(store, s)
     assert after_add == before + 1 and after_remove == before
+
+
+def test_journey_editor_detects_unchanged_vs_changed(store):
+    """Opening a recipe and editing nothing reads as unchanged (so Save can say "no
+    changes — nothing to save" and not rewrite the file); a real edit flips it."""
+    async def s(app, pilot):
+        ed = await open_editor(app, pilot, "e")
+        await pilot.pause(0.1)
+        ev = ed.query_one(EditorView)
+        clean = ev.is_unchanged()
+        ed.query_one("#dose_g", Input).value = "17"
+        await pilot.pause(0.1)
+        return clean, ev.is_unchanged()
+
+    clean, after_edit = drive(store, s)
+    assert clean is True and after_edit is False
+
+
+def test_journey_editor_pattern_cycles_through_valid_values(store):
+    """The pattern field is a compact selector cycling spiral → ring → center."""
+    async def s(app, pilot):
+        ed = await open_editor(app, pilot, "e")
+        await pilot.pause(0.1)
+        cell = ed.query(PourRow).first().query_one("#pattern", PatternCell)
+        seen = [cell.value]
+        for _ in range(3):
+            cell.on_click()
+            seen.append(cell.value)
+        return seen
+    seen = drive(store, s)
+    assert seen[:4] == ["spiral", "ring", "center", "spiral"]   # cycles + wraps
+
+
+def test_journey_clone_opens_new_from_recipe(store):
+    """Clone (C) opens the editor pre-filled from the highlighted recipe, as a NEW
+    recipe: name suffixed '(copy)', always saveable, saved to a fresh file."""
+    async def s(app, pilot):
+        await pilot.pause(0.05)
+        await pilot.press("C")
+        for _ in range(30):
+            await pilot.pause(0.03)
+            if isinstance(app.screen, EditorScreen):
+                break
+        await pilot.pause(0.1)
+        ev = app.screen.query_one(EditorView)
+        name = ev.query_one("#name", Input).value
+        return name, ev.is_unchanged()
+    name, unchanged = drive(store, s)
+    assert name.endswith("(copy)")     # cloned from the source recipe's name
+    assert unchanged is False          # a clone always counts as new (saves)
 
 
 def test_journey_editor_discard_guard(store):
