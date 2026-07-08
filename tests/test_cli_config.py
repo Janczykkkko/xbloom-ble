@@ -89,7 +89,16 @@ def test_cloud_sync_all_managed_uses_prefix(sandbox, capsys):
 
 
 def test_cloud_sync_all_empty_dir(sandbox, capsys):
-    args = types.SimpleNamespace(dir=str(sandbox / "empty"), cup="omni", managed=False)
+    args = types.SimpleNamespace(dir=str(sandbox / "empty"), cup="xdripper", managed=False)
     (sandbox / "empty").mkdir()
     assert cli._cloud_sync_all(object(), args) == 0
     assert "No valid recipes" in capsys.readouterr().out
+
+
+def test_cloud_cup_defaults_are_valid():
+    # 'omni' is NOT a valid xBloom cup type — the API only accepts other/tea/xdripper/xpod.
+    # Guard the defaults so sync-all/sync/add-recipe don't ship a bad one again.
+    parser = cli.build_parser()
+    valid = {"other", "tea", "xdripper", "xpod"}
+    for argv in (["cloud", "sync-all"], ["cloud", "sync", "r.yaml"], ["cloud", "add-recipe", "r.yaml"]):
+        assert parser.parse_args(argv).cup in valid, argv

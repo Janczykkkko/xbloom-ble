@@ -623,13 +623,13 @@ def build_parser() -> argparse.ArgumentParser:
         "sync", help="create-or-update a tool-owned 'AUTO …' recipe (idempotent, safe)"
     )
     c_sync.add_argument("recipe", help="path to a recipe YAML, or an http(s):// URL")
-    c_sync.add_argument("--cup", default="omni", help="cup type (default omni)")
+    c_sync.add_argument("--cup", default="xdripper", help="cup type (default: xdripper=OMNI)")
 
     c_add = cloud_sub.add_parser(
         "add-recipe", help="⚠️ create a recipe in your account from a recipe YAML"
     )
     c_add.add_argument("recipe", help="path to a recipe YAML, or an http(s):// URL")
-    c_add.add_argument("--cup", default="omni", help="cup type (default omni)")
+    c_add.add_argument("--cup", default="xdripper", help="cup type (default: xdripper=OMNI)")
 
     cloud_sub.add_parser("list", help="list the recipes in your account (marks tool-owned)")
 
@@ -644,7 +644,7 @@ def build_parser() -> argparse.ArgumentParser:
         "sync-all",
         help="sync ALL local recipes to your account (overwrites same-named — warns)")
     c_syncall.add_argument("--dir", help="recipe directory (default: your config's recipe store)")
-    c_syncall.add_argument("--cup", default="omni", help="cup type (default omni)")
+    c_syncall.add_argument("--cup", default="xdripper", help="cup type (default: xdripper=OMNI)")
     c_syncall.add_argument(
         "--managed", action="store_true",
         help="use the safe 'AUTO …' prefix instead (never overwrite your own recipes)")
