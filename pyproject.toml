@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "xbloom-ble"
 version = "2.0.0"
-description = "Unofficial Bluetooth LE control for the xBloom Studio coffee machine (loads recipes only — never auto-starts a brew)."
+description = "Unofficial Bluetooth LE control for the xBloom Studio coffee machine — version recipes, brew remotely (loading only arms; starting is always explicit), program the dial presets, and stream live scale weights."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }

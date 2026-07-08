@@ -25,6 +25,8 @@ Today a fresh user gets an empty recipes dir, no saved machine, and no config. S
 - [ ] **Seed recipes** on first run — bundle a few starters, and/or offer "import from your
       xBloom app account" (the cloud client already exists).
 - [ ] **Friendly empty state** in the TUI ("No recipes yet — `n` to create, `i` to import").
+- [ ] **Polish the recipe editor** — the grid layout is cramped/rough (misaligned labels,
+      tiny per-pour cells); make it a cleaner, more legible form.
 
 ## Persistence
 
