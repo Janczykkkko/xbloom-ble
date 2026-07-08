@@ -374,6 +374,14 @@ class XBloomApp(App):
 
     # ── chrome ─────────────────────────────────────────────────────
     def _sync_chrome(self) -> None:
+        if not self.is_running:          # the app may be tearing down mid-brew
+            return
+        try:
+            self._render_chrome()
+        except Exception:                # a widget vanished during teardown — harmless
+            pass
+
+    def _render_chrome(self) -> None:
         conn = "● connected" if getattr(self.controller, "address", None) else "○ idle"
         brew = "brewing…" if self._brewing else "idle"
         self.query_one(Header).set_context({

@@ -71,7 +71,7 @@ def drive(store, scenario, *, speed=0.002, auto_start=0.03, size=(120, 34),
     return asyncio.run(run())
 
 
-async def await_brew(app, pilot, timeout=8.0):
+async def await_brew(app, pilot, timeout=20.0):   # generous: coverage instrumentation slows the sim
     t0 = time.monotonic()
     while time.monotonic() - t0 < timeout:
         await pilot.pause(0.02)

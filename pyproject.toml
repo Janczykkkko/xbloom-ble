@@ -30,7 +30,7 @@ dependencies = [
 cloud = ["cryptography>=41"]
 # The interactive terminal UI (`xbloom` with no args, or `xbloom tui`).
 tui = ["textual>=1", "textual-plotext>=1"]
-dev = ["pytest>=7", "ruff>=0.1", "cryptography>=41", "textual>=1", "textual-plotext>=1"]
+dev = ["pytest>=7", "pytest-cov>=4", "ruff>=0.1", "cryptography>=41", "textual>=1", "textual-plotext>=1"]
 
 [project.urls]
 Homepage = "https://github.com/Janczykkkko/xbloom-ble"
@@ -45,6 +45,19 @@ include = ["xbloom_ble*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["xbloom_ble"]
+
+[tool.coverage.report]
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@(abc\\.)?abstractmethod",
+    "\\.\\.\\.",              # abstract-method / protocol stubs
+]
 
 [tool.ruff]
 line-length = 100

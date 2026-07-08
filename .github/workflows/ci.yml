@@ -32,3 +32,39 @@ jobs:
         run: ruff check .
       - name: Test (pytest)
         run: pytest -q
+
+  # Coverage runs ONCE (not per Python) — measures, comments on the PR, and gates.
+  coverage:
+    name: coverage
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write        # to post/update the sticky coverage comment
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: pip install -e ".[dev]"
+      - name: Test with coverage
+        run: pytest -q --cov=xbloom_ble --cov-report=xml --cov-report=term-missing
+      - name: Coverage summary (markdown)
+        uses: irongut/CodeCoverageSummary@v1.3.0
+        with:
+          filename: coverage.xml
+          format: markdown
+          output: file
+          badge: true
+          hide_complexity: true
+          thresholds: "65 85"       # < 65 red · 65–85 orange · > 85 green
+      - name: Sticky coverage comment
+        if: github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: coverage
+          recreate: true
+          path: code-coverage-results.md
+      - name: Enforce coverage floor (65%)
+        run: coverage report --fail-under=65
