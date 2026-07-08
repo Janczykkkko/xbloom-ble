@@ -878,3 +878,100 @@ def test_journey_log_toggle(store):
         return before, panel.has_class("hidden")
     before, after = drive(store, s)
     assert before is False and after is True
+
+
+class _PlateauNoTerminalController(MachineController):
+    """Streams up to target water + a plateaued cup weight, then keeps yielding FLAT frames
+    and NEVER a terminal state. On the real machine the 'done' 0x41 only fires on CUP-LIFT,
+    so a hands-off brew must complete from the weight plateau alone (the drawdown/beep)."""
+
+    def __init__(self) -> None:
+        self.address = "AA:BB:CC:DD:EE:FF"
+        self.cancelled = False
+        self.started = False
+
+    async def scan(self):
+        return [self.address]
+
+    async def connect(self, address=None):
+        pass
+
+    async def stage(self, recipe):
+        recipe.validate()
+        return StatusEvent(state=0x1F, state_name="armed", raw=b"\x58armed")
+
+    async def start(self):
+        self.started = True
+        return StatusEvent(state=0x22, state_name="starting", raw=b"\x58start")
+
+    async def telemetry(self, duration: float = 300.0):
+        # pours ramp up to target (240 g), cup weight climbing behind it
+        for w, c in [(60.0, 5.0), (240.0, 120.0), (240.0, 205.0)]:
+            yield StatusEvent(state=None, state_name="scale", raw=b"\x58s", water_g=w, coffee_g=c)
+            await asyncio.sleep(0.01)
+        # drawdown finished: keep streaming the SAME flat weights — NO terminal state, ever.
+        for _ in range(400):
+            yield StatusEvent(state=None, state_name="scale", raw=b"\x58s",
+                              water_g=240.0, coffee_g=205.0)
+            await asyncio.sleep(0.01)
+
+    async def cancel(self):
+        self.cancelled = True
+
+    async def save_slots(self, recipes):
+        pass
+
+    async def disconnect(self):
+        pass
+
+
+def test_journey_brew_completes_on_weight_plateau_without_cup_lift(store, tmp_path, monkeypatch):
+    """The machine only sends a definite 'done' (0x41) on CUP-LIFT; a hands-off brew must
+    still complete once the pours are done and the cup weight stops rising (drip finished =
+    the beep). Regression for 'it didn't stop when it beeped — I had to lift the cup'."""
+    import xbloom_ble.tui.app as appmod
+    monkeypatch.setattr(appmod, "_DRAWDOWN_PLATEAU_S", 0.1)   # shrink the wait for the test
+    from xbloom_ble.tui.history import HistoryStore
+    hist = HistoryStore(tmp_path / "h.json")
+    ctrl = _PlateauNoTerminalController()
+
+    async def s(app, pilot):
+        await start_brew(app, pilot, "b")
+        for _ in range(400):
+            await pilot.pause(0.02)
+            if not app._brewing:
+                break
+        return app._brewing, max(app._water), max(app._coffee), hist.list()
+
+    brewing, water, coffee, hlist = drive(store, s, controller=ctrl, history=hist)
+    assert brewing is False                       # completed with NO terminal state / cup-lift
+    assert water == 240.0 and coffee == 205.0
+    assert not ctrl.cancelled                      # a real finish, not an abort
+    assert hlist and hlist[0]["water_g"] == 240.0  # recorded to history
+
+
+def test_journey_history_row_highlight_updates_detail(store, tmp_path):
+    """Moving the cursor in the History tab redraws the detail for THAT brew — previously the
+    graph stayed stuck on the newest row (no row-highlight handler)."""
+    from xbloom_ble.tui.history import HistoryStore
+    hist = HistoryStore(tmp_path / "h.json")
+    hist.record(recipe="Brew Older", dose_g=15, water_g=240, ratio=16, duration_s=200,
+                telemetry={"t": [1, 2], "water": [10, 240], "coffee": [0, 200]})
+    hist.record(recipe="Brew Newer", dose_g=16, water_g=256, ratio=16, duration_s=210,
+                telemetry={"t": [1, 2], "water": [10, 256], "coffee": [0, 210]})
+
+    def head(app):
+        return str(app.query_one("#hdetail-head").render())
+
+    async def s(app, pilot):
+        await pilot.press("tab")           # recipes → brewing
+        await pilot.press("tab")           # brewing → history
+        await pilot.pause(0.1)
+        top = head(app)                    # detail starts on the newest brew
+        await pilot.press("j")             # move the cursor down one row
+        await pilot.pause(0.1)
+        return top, head(app)
+
+    top, second = drive(store, s, history=hist)
+    assert "Brew Newer" in top             # newest-first, detail on row 0
+    assert "Brew Older" in second          # ...and the detail follows the cursor
