@@ -782,32 +782,47 @@ class XBloomApp(App):
                 and started.state_name in ("starting", "brewing")
             )
             completed = False           # the brew reached a natural end (record history)
+            last_water = last_coffee = 0.0   # running scale values (frames are separate)
+            last_replot = 0.0
             async for ev in self.controller.telemetry():
                 if not self.is_running:
                     break
+                # Live-scale frames (0x4b water / 0x15 coffee) arrive separately, ~10x/s.
+                # Pair them into one running point for the graph; a real reading means the
+                # brew is genuinely pouring (progress). Handle + skip the rest of the loop.
+                if ev.water_g is not None or ev.coffee_g is not None:
+                    if ev.water_g is not None:
+                        last_water = ev.water_g
+                    if ev.coffee_g is not None:
+                        last_coffee = ev.coffee_g
+                    saw_progress = True
+                    now = time.monotonic()
+                    self._t.append(round(now - t0, 1))
+                    self._water.append(last_water)
+                    self._coffee.append(last_coffee)
+                    if now - last_replot > 0.4:   # throttle: the stream is ~10 Hz
+                        self._replot()
+                        last_replot = now
+                # A real scale frame (state_name "scale") carries no state — done. The
+                # sim emits state + weights in one event, so only skip pure scale frames.
+                if ev.state_name == "scale":
+                    continue
                 if ev.state_name in ("awaiting_confirm", "starting", "brewing",
                                      "no_beans", "no_water"):
                     brew_began = True
-                if ev.state_name in ("starting", "brewing") or ev.water_g is not None:
+                if ev.state_name in ("starting", "brewing"):
                     # 'starting' (0x22) = the machine is grinding/spinning up on our
                     # commit — real progress. Counting it here keeps the 20 s "didn't
                     # start" guard below from cancelling a legitimate brew that spends
                     # its first seconds grinding + blooming before the first 0x3b.
                     saw_progress = True
-                # Track state transitions ALWAYS — even when live weights aren't decoded
-                # (on real hardware water_g may be None) — so we log the brew, show a
-                # friendly status, and exit on complete instead of spinning.
+                # Track state transitions ALWAYS — so we log the brew, show a friendly
+                # status, and exit on complete instead of spinning.
                 if ev.state_name != last_state:
                     last_state = ev.state_name
                     msg, style = _STATE_MSG.get(ev.state_name, (f"● {ev.state_name}", "cyan"))
-                    water = f"  water {ev.water_g:g} g" if ev.water_g is not None else ""
-                    self._log(f"{msg}{water}", style)
-                    self._brew_status(f"{head}\n[{style}]{msg}[/]{water}")
-                if ev.water_g is not None:
-                    self._t.append(round(time.monotonic() - t0, 1))
-                    self._water.append(ev.water_g)
-                    self._coffee.append(ev.coffee_g or 0.0)
-                    self._replot()
+                    self._log(msg, style)
+                    self._brew_status(f"{head}\n[{style}]{msg}[/]")
                 if ev.state_name in ("no_beans", "no_water"):
                     await self._abort_supply(ev.state_name, head)
                     break
@@ -838,10 +853,13 @@ class XBloomApp(App):
                     except Exception:  # noqa: BLE001
                         pass
                     break
+            self._replot()   # final render so the last (throttled) segment shows
             if completed:
-                final_water = self._water[-1] if self._water else 0.0
-                suffix = (f" — {final_water:g} g" if self._water
-                          else " (brew ran; no live weights on this firmware)")
+                # Peak, not last: the machine zeroes its water scale at the very end.
+                final_water = max(self._water) if self._water else 0.0
+                final_coffee = max(self._coffee) if self._coffee else 0.0
+                suffix = (f" — {final_water:g} g water · {final_coffee:g} g in cup"
+                          if self._water else " (brew ran; no live weights captured)")
                 self._log(f"✓ brew complete{suffix}", "green")
                 self.history.record(
                     recipe=r.name, dose_g=r.dose_g, water_g=final_water,

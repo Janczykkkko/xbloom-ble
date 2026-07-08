@@ -37,17 +37,23 @@ Byte  Name                          Meaning
 ====  ============================  =========================================
 
 Note on the brew sequence (observed on firmware V12.0D.500): after commit the
-machine goes ``awaiting_confirm (0x1e) → starting (0x22)``, then **grinds and blooms
-SILENTLY** — it emits only heartbeats, no status frames, for ~20 s — before it reports
-the pour as ``0x10``. Consumers must not treat that silence as a stalled brew.
+machine goes ``awaiting_confirm (0x1e) → starting (0x22)``, then **grinds SILENTLY**
+— it emits no ``0x57`` *status* frame for ~20 s (only the scale stream, reading ~0)
+— before it reports the pour as ``0x10``. Consumers must not treat that gap as a
+stalled brew.
 
 The state ``0x1f`` (armed) is what :meth:`XBloomClient.load_recipe` waits for
-after sending the four LOAD frames — the machine is armed and prompting the
-human. Live brew-weight decoding is best-effort and left ``None`` here.
+after sending the four LOAD frames — the machine is armed and prompting the human.
+
+Live weights: the machine streams the two brew-record weights the app graphs, ~10x/s,
+as float32 (LE) frames — TYPE ``0x4b`` = water (in milligrams), TYPE ``0x15`` =
+coffee/cup (in grams). :func:`parse_notification` decodes them into
+:attr:`StatusEvent.water_g` / :attr:`StatusEvent.coffee_g`.
 """
 
 from __future__ import annotations
 
+import struct
 from dataclasses import dataclass
 
 __all__ = [
@@ -80,8 +86,15 @@ STATE_NAMES: dict[int, str] = {
 # the machine just sitting idle before anything started.
 BREW_ACTIVE_STATES = frozenset({0x1E, 0x22, 0x3B, 0x0F, 0x0C})
 
-# Notification TYPE bytes (offset 3) that are idle heartbeats — ignored.
-HEARTBEAT_TYPES = frozenset({0x15, 0x4B})
+# Live-scale streams. The machine pushes the two brew-record weights the app graphs
+# (~10x/s) as a float32 (little-endian) right after the 0xc1 marker. These were long
+# mistaken for idle "heartbeats" (they DO stream at idle, reading ~0) — they are the
+# weight stream. Verified against hardware + the app's on-screen "Brew Record" graph.
+WATER_TYPE = 0x4B          # TYPE 0x4b: water weight — float32 LE in MILLIgrams (÷1000 = g)
+COFFEE_TYPE = 0x15         # TYPE 0x15: coffee/cup weight — float32 LE already in grams
+SCALE_TYPES = frozenset({WATER_TYPE, COFFEE_TYPE})
+# Back-compat alias (these TYPE bytes used to be treated as ignorable heartbeats).
+HEARTBEAT_TYPES = SCALE_TYPES
 # Kept for backward compat (consumers referencing it): heartbeat state sentinels.
 IGNORED_STATES = frozenset({0x15, 0x4B})
 
@@ -132,6 +145,28 @@ def _marker_idx(data: bytes) -> int:
     return data.find(STATE_MARKER, 5)
 
 
+def _decode_scale_grams(data: bytes, *, scale: float) -> float | None:
+    """Decode a scale frame's float32 (LE) weight, in grams.
+
+    The value sits immediately after the 0xc1 marker. ``scale`` converts the raw
+    units to grams (water arrives in milligrams → ``0.001``; coffee is already grams
+    → ``1.0``). Returns ``None`` for implausible readings — the scale drifts and
+    reads noise (negative / huge / NaN) when idle or untared, and only means anything
+    once a brew is pouring onto it.
+    """
+    marker = _marker_idx(data)
+    if marker < 0 or marker + 5 > len(data):
+        return None
+    try:
+        raw = struct.unpack_from("<f", data, marker + 1)[0]
+    except struct.error:
+        return None
+    grams = raw * scale
+    if grams != grams or grams < 0.0 or grams > 2000.0:  # NaN or out of range
+        return None
+    return round(grams, 2)
+
+
 def parse_notification(data: bytes) -> StatusEvent | None:
     """Decode a raw ``ffe2`` notification into a :class:`StatusEvent`.
 
@@ -147,11 +182,18 @@ def parse_notification(data: bytes) -> StatusEvent | None:
     if len(data) < 10 or data[0] != 0x58:
         return None
 
-    ftype = data[3]  # TYPE byte: command echo/ACK, 0x57 status, or heartbeat.
+    ftype = data[3]  # TYPE byte: command echo/ACK, 0x57 status, or a scale stream.
 
-    # Idle heartbeats — surface as heartbeat events so consumers skip them.
-    if ftype in HEARTBEAT_TYPES:
-        return StatusEvent(state=ftype, state_name="idle_heartbeat", raw=data)
+    # Live-scale streams (the two brew-record weights the app graphs). Each carries a
+    # single float32 (LE) after the 0xc1 marker: 0x4b = water (milligrams), 0x15 =
+    # coffee (grams). We surface each in its field; the other stays None (they arrive as
+    # separate, interleaved frames). Idle/untared noise decodes to None and is dropped.
+    if ftype == WATER_TYPE:
+        g = _decode_scale_grams(data, scale=0.001)
+        return StatusEvent(state=None, state_name="scale", raw=data, water_g=g)
+    if ftype == COFFEE_TYPE:
+        g = _decode_scale_grams(data, scale=1.0)
+        return StatusEvent(state=None, state_name="scale", raw=data, coffee_g=g)
 
     marker = _marker_idx(data)
     payload = data[marker + 1 : -2] if marker >= 0 else b""
