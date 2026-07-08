@@ -381,6 +381,101 @@ class _SilentGrindController(MachineController):
         pass
 
 
+class _ScaleStreamController(MachineController):
+    """Streams real-shape scale frames (0x4b water / 0x15 coffee arrive separately),
+    then the 0x24 'ready' beep — exercising the live-weight graph pairing + completion.
+    """
+
+    def __init__(self) -> None:
+        self.address = "AA:BB:CC:DD:EE:FF"
+        self.cancelled = False
+        self.started = False
+
+    async def scan(self):
+        return [self.address]
+
+    async def connect(self, address=None):
+        pass
+
+    async def stage(self, recipe):
+        recipe.validate()
+        return StatusEvent(state=0x1F, state_name="armed", raw=b"\x58armed")
+
+    async def start(self):
+        self.started = True
+        return StatusEvent(state=0x22, state_name="starting", raw=b"\x58start")
+
+    async def telemetry(self, duration: float = 300.0):
+        # water and coffee come as SEPARATE frames — the UI pairs them into one point
+        for w, c in [(35.0, None), (None, 12.0), (240.0, None), (None, 204.0)]:
+            yield StatusEvent(state=None, state_name="scale", raw=b"\x58s",
+                              water_g=w, coffee_g=c)
+            await asyncio.sleep(0.01)
+        yield StatusEvent(state=0x24, state_name="ready", raw=b"\x58r")
+
+    async def cancel(self):
+        self.cancelled = True
+
+    async def save_slots(self, recipes):
+        pass
+
+    async def disconnect(self):
+        pass
+
+
+def test_journey_brew_streams_live_weights_and_completes_on_ready(store, tmp_path):
+    """The live water/coffee streams fill the graph, the brew completes on the 0x24
+    'ready' beep (no cup-off needed), and peak weights are recorded to history."""
+    from xbloom_ble.tui.history import HistoryStore
+    hist = HistoryStore(tmp_path / "h.json")
+    ctrl = _ScaleStreamController()
+
+    async def s(app, pilot):
+        await start_brew(app, pilot, "b")
+        for _ in range(300):
+            await pilot.pause(0.02)
+            if not app._brewing:
+                break
+        return list(app._water), list(app._coffee), hist.list()
+
+    water, coffee, hlist = drive(store, s, controller=ctrl, history=hist)
+    assert max(water) == 240.0 and max(coffee) == 204.0   # paired running points
+    assert not ctrl.cancelled                              # completed, not aborted
+    assert hlist and hlist[0]["water_g"] == 240.0          # peak recorded to history
+
+
+class _RefusalController(_ScaleStreamController):
+    """start() reports a no-water/no-beans refusal — the brew must abort (cancel)."""
+
+    def __init__(self, what: str = "no_water") -> None:
+        super().__init__()
+        self._what = what
+
+    async def start(self):
+        self.started = True
+        st = 0x0C if self._what == "no_water" else 0x0F
+        return StatusEvent(state=st, state_name=self._what, raw=b"\x58refuse")
+
+    async def telemetry(self, duration: float = 300.0):
+        if False:            # never reached — _brew aborts before streaming
+            yield
+
+
+def test_journey_brew_aborts_on_no_water(store):
+    ctrl = _RefusalController("no_water")
+
+    async def s(app, pilot):
+        await start_brew(app, pilot, "b")
+        for _ in range(100):
+            await pilot.pause(0.02)
+            if not app._brewing:
+                break
+        return ctrl.cancelled, app._brewing
+
+    cancelled, brewing = drive(store, s, controller=ctrl)
+    assert cancelled and not brewing     # _abort_supply cancelled it back to idle
+
+
 def test_journey_remote_brew_survives_silent_grind(store, monkeypatch):
     """Regression (hw log 2026-07-08 09:15): a real brew was cancelled mid-grind.
 

@@ -45,10 +45,9 @@ NAME_PREFIX = "XBLOOM"
 
 # State byte that means "recipe loaded / armed".
 STATE_ARMED = 0x1F
-# Brew lifecycle states: 0x1e awaiting-confirm (after commit), 0x22 starting/grinding,
-# 0x3b brewing. On some machines commit auto-proceeds through these; on others the
-# machine waits in awaiting-confirm and needs the 0x46 start frame.
-STATE_AWAITING_CONFIRM = 0x1E
+# Brew lifecycle states: 0x22 starting/grinding, 0x3b brewing. On some machines commit
+# auto-proceeds through these; on others the machine waits in awaiting-confirm (0x1e)
+# and needs the 0x46 start frame.
 STATE_STARTING = 0x22
 STATE_BREWING = 0x3B
 # Machine-refused states (it checks water/beans right after commit, before pouring).
@@ -61,14 +60,6 @@ STATE_SLOTS_SAVED = 0x25
 
 class XBloomError(RuntimeError):
     """Raised on BLE / protocol errors in the client."""
-
-
-def _short_uuid(uuid: str) -> str:
-    """Return the 16-bit short form of a Bluetooth-base UUID, else the input."""
-    u = uuid.lower()
-    if u.endswith("-0000-1000-8000-00805f9b34fb") and u.startswith("0000"):
-        return u[4:8]
-    return u
 
 
 async def scan(timeout: float = 8.0):
@@ -432,31 +423,6 @@ class XBloomClient:
         if len(vals) != 3:
             raise XBloomError(f"scale sequence must have 3 entries; got {len(vals)}")
         return vals
-
-    async def _await_ack(self, cmd: int) -> None:
-        """Wait for the ACK frame echoing ``cmd`` (best-effort, tolerant)."""
-        loop = asyncio.get_event_loop()
-        deadline = loop.time() + self.ack_timeout
-        while True:
-            remaining = deadline - loop.time()
-            if remaining <= 0:
-                log.warning("no explicit ACK for cmd 0x%02x; continuing", cmd)
-                return
-            try:
-                event = await asyncio.wait_for(self._notif_queue.get(), timeout=remaining)
-            except asyncio.TimeoutError:
-                log.warning("no explicit ACK for cmd 0x%02x; continuing", cmd)
-                return
-            if event.is_heartbeat:
-                continue
-            # An ACK echoes the command byte at offset 3.
-            if len(event.raw) > 3 and event.raw[3] == cmd:
-                log.debug("← ACK 0x%02x", cmd)
-                return
-            # A status frame arriving early (e.g. armed) also counts as progress;
-            # put it back so the caller's state wait can see it.
-            self._notif_queue.put_nowait(event)
-            return
 
     # ------------------------------------------------------------------
     # Telemetry streaming

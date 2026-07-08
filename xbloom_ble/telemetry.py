@@ -85,25 +85,21 @@ STATE_NAMES: dict[int, str] = {
     0x25: "slots_saved",
 }
 
-# States the machine reports (via 0x57 status frames) once the human has confirmed a
-# brew — i.e. the brew is underway. Used to distinguish "the brew ended" (→ idle) from
-# the machine just sitting idle before anything started.
-BREW_ACTIVE_STATES = frozenset({0x1E, 0x22, 0x3B, 0x0F, 0x0C})
-
 # Live-scale streams. The machine pushes the two brew-record weights the app graphs
 # (~10x/s) as a float32 (little-endian) right after the 0xc1 marker. These were long
 # mistaken for idle "heartbeats" (they DO stream at idle, reading ~0) — they are the
 # weight stream. Verified against hardware + the app's on-screen "Brew Record" graph.
 WATER_TYPE = 0x4B          # TYPE 0x4b: water weight — float32 LE in MILLIgrams (÷1000 = g)
 COFFEE_TYPE = 0x15         # TYPE 0x15: coffee/cup weight — float32 LE already in grams
-SCALE_TYPES = frozenset({WATER_TYPE, COFFEE_TYPE})
-# Back-compat alias (these TYPE bytes used to be treated as ignorable heartbeats).
-HEARTBEAT_TYPES = SCALE_TYPES
-# Kept for backward compat (consumers referencing it): heartbeat state sentinels.
+# Heartbeat state sentinels (0x15/0x4b as *states*) — kept for the is_heartbeat property
+# and back-compat; the live streams above are keyed by TYPE, not state.
 IGNORED_STATES = frozenset({0x15, 0x4B})
 
-# States that mean the brew is over / the machine is idle.
-TERMINAL_STATES = frozenset({0x41, 0x01})
+# States that mean the brew is over. 0x24 = "coffee ready" (the beep — the true end of
+# a brew, cup still on the scale); 0x01 = idle (only reached once the cup is lifted).
+# Making 0x24 terminal is what lets a plain stream_telemetry consumer (the CLI) stop at
+# the beep instead of hanging until cup-off. (0x41 kept for firmwares that report it.)
+TERMINAL_STATES = frozenset({0x24, 0x41, 0x01})
 
 STATUS_CMD = 0x57      # TYPE byte of a status frame (state follows the 0xc1 marker)
 STATE_MARKER = 0xC1
