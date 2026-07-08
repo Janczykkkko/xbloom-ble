@@ -781,6 +781,7 @@ class XBloomApp(App):
                 started is not None and started.raw
                 and started.state_name in ("starting", "brewing")
             )
+            completed = False           # the brew reached a natural end (record history)
             async for ev in self.controller.telemetry():
                 if not self.is_running:
                     break
@@ -811,9 +812,13 @@ class XBloomApp(App):
                     await self._abort_supply(ev.state_name, head)
                     break
                 if ev.state_name in ("complete", "cancelled"):
+                    completed = ev.state_name == "complete"
                     break
                 if ev.state_name == "idle" and brew_began:
-                    # machine went back to idle after the brew ran / was cancelled
+                    # This machine has NO distinct 'complete' status — it signals brew-END
+                    # by returning to idle (0x01). If we actually saw the brew run, that's a
+                    # normal finish (record history); an early idle without progress is not.
+                    completed = saw_progress
                     break
                 if remote_start and not saw_progress and (time.monotonic() - t0) > _GRIND_GUARD_S:
                     # We commanded a remote start but the machine never actually brewed
@@ -827,9 +832,10 @@ class XBloomApp(App):
                     except Exception:  # noqa: BLE001
                         pass
                     break
-            if last_state == "complete":
+            if completed:
                 final_water = self._water[-1] if self._water else 0.0
-                suffix = f" — {final_water:g} g" if self._water else " (no live weights)"
+                suffix = (f" — {final_water:g} g" if self._water
+                          else " (brew ran; no live weights on this firmware)")
                 self._log(f"✓ brew complete{suffix}", "green")
                 self.history.record(
                     recipe=r.name, dose_g=r.dose_g, water_g=final_water,
