@@ -690,6 +690,17 @@ class XBloomApp(App):
             self._brew_status("[yellow]● cancelling… (waiting for the machine to stop)[/]")
             self.run_worker(self.controller.cancel(), name="cancel")
 
+    async def _abort_supply(self, state_name: str, head: str) -> None:
+        """Machine refused for no beans/water — cancel it back to idle and message."""
+        what = "beans" if state_name == "no_beans" else "water"
+        self._log(f"✗ no {what} — aborting; add {what} and brew again", "red")
+        self._brew_status(f"{head}\n[red]✗ no {what} — brew aborted "
+                          f"(add {what}, then brew again)[/]")
+        try:
+            await self.controller.cancel()
+        except Exception:  # noqa: BLE001
+            pass
+
     def _brew_status(self, text: str) -> None:
         if not self.is_running:
             return
@@ -734,7 +745,13 @@ class XBloomApp(App):
             if remote_start:
                 self._brew_status(f"{head}\n[yellow]● armed — starting…[/]")
                 self._log("armed — starting brew ▶", "yellow")
-                await self.controller.start()
+                started = await self.controller.start()
+                # start() returns the state the machine acted with. If it refused
+                # immediately (no water/beans), the telemetry stream won't repeat that
+                # event (start() consumed it) — so handle it here.
+                if started is not None and started.state_name in ("no_beans", "no_water"):
+                    await self._abort_supply(started.state_name, head)
+                    return
                 self._brew_status(f"{head}\n[cyan]● brewing…[/]")
                 self._log("brew started ▶", "cyan")
             else:
@@ -769,16 +786,7 @@ class XBloomApp(App):
                     self._coffee.append(ev.coffee_g or 0.0)
                     self._replot()
                 if ev.state_name in ("no_beans", "no_water"):
-                    # The machine refuses (no beans / no water) and drops the staged
-                    # recipe — abort: cancel back to idle and stop (don't sit waiting).
-                    what = "beans" if ev.state_name == "no_beans" else "water"
-                    self._log(f"✗ no {what} — aborting; add {what} and brew again", "red")
-                    self._brew_status(f"{head}\n[red]✗ no {what} — brew aborted "
-                                      f"(add {what}, then brew again)[/]")
-                    try:
-                        await self.controller.cancel()
-                    except Exception:  # noqa: BLE001
-                        pass
+                    await self._abort_supply(ev.state_name, head)
                     break
                 if ev.state_name in ("complete", "cancelled"):
                     break
