@@ -34,7 +34,7 @@ TABS = ["recipes", "brewing", "history"]
 _STATE_MSG = {
     "armed": ("● armed — approve on the machine ▶", "yellow"),
     "awaiting_confirm": ("● add beans + confirm on the machine ▶", "yellow"),
-    "no_beans": ("⚠ NO BEANS — add beans on the machine, or press [c] to cancel", "red"),
+    "no_beans": ("⚠ no beans on the machine", "red"),
     "starting": ("● grinding / starting…", "cyan"),
     "brewing": ("● brewing…", "cyan"),
     "complete": ("✓ complete", "green"),
@@ -744,11 +744,14 @@ class XBloomApp(App):
             t0 = time.monotonic()
             last_state = None
             brew_began = remote_start   # a remote start means the brew is already underway
+            saw_progress = False        # saw real brewing (a brewing state or live water)
             async for ev in self.controller.telemetry():
                 if not self.is_running:
                     break
                 if ev.state_name in ("awaiting_confirm", "starting", "brewing", "no_beans"):
                     brew_began = True
+                if ev.state_name == "brewing" or ev.water_g is not None:
+                    saw_progress = True
                 # Track state transitions ALWAYS — even when live weights aren't decoded
                 # (on real hardware water_g may be None) — so we log the brew, show a
                 # friendly status, and exit on complete instead of spinning.
@@ -763,10 +766,33 @@ class XBloomApp(App):
                     self._water.append(ev.water_g)
                     self._coffee.append(ev.coffee_g or 0.0)
                     self._replot()
+                if ev.state_name == "no_beans":
+                    # The machine found no beans and drops the staged recipe — abort:
+                    # cancel it back to idle and stop streaming (don't sit waiting).
+                    self._log("✗ no beans — aborting; add beans and brew again", "red")
+                    self._brew_status(f"{head}\n[red]✗ no beans — brew aborted "
+                                      "(add beans, then brew again)[/]")
+                    try:
+                        await self.controller.cancel()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    break
                 if ev.state_name in ("complete", "cancelled"):
                     break
                 if ev.state_name == "idle" and brew_began:
                     # machine went back to idle after the brew ran / was cancelled
+                    break
+                if remote_start and not saw_progress and (time.monotonic() - t0) > 20:
+                    # We commanded a remote start but the machine never actually brewed
+                    # (it reverts to armed ~1-2s later when there are no beans / it isn't
+                    # ready). Stop instead of streaming forever; nudge to check the setup.
+                    self._log("brew didn't start — beans + water + cup in? (stopping)", "yellow")
+                    self._brew_status(f"{head}\n[yellow]⚠ brew didn't start — is there "
+                                      "beans + water + a cup? then try again[/]")
+                    try:
+                        await self.controller.cancel()
+                    except Exception:  # noqa: BLE001
+                        pass
                     break
             if last_state == "complete":
                 final_water = self._water[-1] if self._water else 0.0

@@ -229,18 +229,21 @@ class XBloomClient:
     # ------------------------------------------------------------------
     # Starting / cancelling a brew  (explicit — dispenses hot water)
     # ------------------------------------------------------------------
-    async def start(self, *, settle: float = 6.0) -> StatusEvent:
+    async def start(self, *, settle: float = 6.0, confirm_hold: float = 5.0) -> StatusEvent:
         """Start the currently-armed brew: commit (``0x42``) then start (``0x46``).
 
         The machine must already be armed (call :meth:`load_recipe` first). Sends
-        commit, waits (up to ``settle``) for the machine to reach ``0x1e``
-        (awaiting-confirm, with its countdown) as the app does, then sends start.
+        commit, waits (up to ``settle``) for ``0x1e`` (awaiting-confirm), then
+        **holds ``confirm_hold`` seconds** for the machine's ~99 s add-beans
+        countdown to actually start ticking (``0x39`` frames), and only then sends
+        start — mirroring the vendor app, which sends ``0x46`` several seconds into
+        the countdown. **Sending ``0x46`` too early makes the machine ack it and
+        silently revert to armed without brewing** (verified against a capture).
 
         It then makes a **best-effort** attempt to observe ``0x3b`` (brewing), but
         **never raises if it doesn't** — once commit+start are on the wire the brew
         is running, and the machine typically blows straight past ``0x3b`` into
-        brew-record frames. The caller should stream telemetry for the live state;
-        blocking here (and failing) would abandon a brew that is actually underway.
+        brew-record frames. The caller should stream telemetry for the live state.
 
         ⚠️ This physically dispenses near-boiling water. Only call it when the
         machine is ready (water tank filled, dripper/cup in place) and someone
@@ -257,8 +260,11 @@ class XBloomClient:
             try:
                 await self._drain_until_state(STATE_AWAITING_CONFIRM, settle)
             except XBloomError:
-                log.info("awaiting-confirm not observed; sending start anyway")
-            await asyncio.sleep(0.5)
+                log.info("awaiting-confirm not observed; proceeding")
+            # Let the add-beans countdown get going before start (see docstring) — the
+            # app sends 0x46 ~6 s into the countdown, not immediately.
+            log.info("holding %.1fs for the add-beans countdown before start…", confirm_hold)
+            await asyncio.sleep(confirm_hold)
             log.info("→ 0x46 start (brew go)")
             await self._client.write_gatt_char(CHAR_COMMAND, build_start(), response=False)
             # Best-effort observe brewing — but the brew is already commanded, so a
