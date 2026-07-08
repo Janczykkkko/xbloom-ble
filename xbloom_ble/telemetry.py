@@ -52,14 +52,21 @@ __all__ = [
 
 STATE_NAMES: dict[int, str] = {
     0x01: "idle",
+    0x0F: "no_beans",          # machine wants beans (add beans, or cancel) — it WAITS here
     0x1D: "loading",
     0x1F: "armed",
     0x1E: "awaiting_confirm",
+    0x22: "starting",          # post-confirm: grinding / spinning up
     0x3B: "brewing",
     0x41: "complete",
     0x43: "saving_slots",
     0x25: "slots_saved",
 }
+
+# States the machine reports (via 0x57 status frames) once the human has confirmed a
+# brew — i.e. the brew is underway. Used to distinguish "the brew ended" (→ idle) from
+# the machine just sitting idle before anything started.
+BREW_ACTIVE_STATES = frozenset({0x1E, 0x22, 0x3B, 0x0F})
 
 # Notification TYPE bytes (offset 3) that are idle heartbeats — ignored.
 HEARTBEAT_TYPES = frozenset({0x15, 0x4B})

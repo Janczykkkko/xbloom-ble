@@ -30,6 +30,17 @@ from .store import RecipeStore
 LOGO = "☕ xBloom"
 TABS = ["recipes", "brewing", "history"]
 
+# Friendly (message, style) for the machine states shown during a brew.
+_STATE_MSG = {
+    "armed": ("● armed — approve on the machine ▶", "yellow"),
+    "awaiting_confirm": ("● add beans + confirm on the machine ▶", "yellow"),
+    "no_beans": ("⚠ NO BEANS — add beans on the machine, or press [c] to cancel", "red"),
+    "starting": ("● grinding / starting…", "cyan"),
+    "brewing": ("● brewing…", "cyan"),
+    "complete": ("✓ complete", "green"),
+    "idle": ("● idle", "dim"),
+}
+
 
 class _PanelLogHandler(logging.Handler):
     """Routes ``xbloom_ble`` log records into the TUI's activity panel.
@@ -674,7 +685,8 @@ class XBloomApp(App):
 
     def action_cancel(self) -> None:
         if self._brewing:
-            self._log("cancelling brew…", "yellow")
+            self._log("cancelling brew… (0x47)", "yellow")
+            self._brew_status("[yellow]● cancelling… (waiting for the machine to stop)[/]")
             self.run_worker(self.controller.cancel(), name="cancel")
 
     def _brew_status(self, text: str) -> None:
@@ -731,25 +743,30 @@ class XBloomApp(App):
                 self._log("armed — approve on the machine to start ▶", "yellow")
             t0 = time.monotonic()
             last_state = None
+            brew_began = remote_start   # a remote start means the brew is already underway
             async for ev in self.controller.telemetry():
                 if not self.is_running:
                     break
-                # Track state transitions ALWAYS — even when live weights aren't
-                # decoded (on real hardware water_g may be None), so we still log the
-                # brew, update the status, and exit on complete instead of spinning.
+                if ev.state_name in ("awaiting_confirm", "starting", "brewing", "no_beans"):
+                    brew_began = True
+                # Track state transitions ALWAYS — even when live weights aren't decoded
+                # (on real hardware water_g may be None) — so we log the brew, show a
+                # friendly status, and exit on complete instead of spinning.
                 if ev.state_name != last_state:
                     last_state = ev.state_name
-                    extra = f" · water {ev.water_g:g} g" if ev.water_g is not None else ""
-                    self._log(f"{ev.state_name}{extra}", "cyan")
+                    msg, style = _STATE_MSG.get(ev.state_name, (f"● {ev.state_name}", "cyan"))
+                    water = f"  water {ev.water_g:g} g" if ev.water_g is not None else ""
+                    self._log(f"{msg}{water}", style)
+                    self._brew_status(f"{head}\n[{style}]{msg}[/]{water}")
                 if ev.water_g is not None:
                     self._t.append(round(time.monotonic() - t0, 1))
                     self._water.append(ev.water_g)
                     self._coffee.append(ev.coffee_g or 0.0)
                     self._replot()
-                    self._brew_status(f"{head}\n[cyan]● {ev.state_name}[/]  water {ev.water_g:g} g")
-                else:
-                    self._brew_status(f"{head}\n[cyan]● {ev.state_name}[/]")
                 if ev.state_name in ("complete", "cancelled"):
+                    break
+                if ev.state_name == "idle" and brew_began:
+                    # machine went back to idle after the brew ran / was cancelled
                     break
             if last_state == "complete":
                 final_water = self._water[-1] if self._water else 0.0
