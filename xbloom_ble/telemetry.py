@@ -75,6 +75,10 @@ STATE_NAMES: dict[int, str] = {
     0x1F: "armed",
     0x1E: "awaiting_confirm",
     0x22: "starting",          # post-confirm: grinding / spinning up
+    0x23: "brewing",           # mid-pour sub-state (keeps the status on "brewing…")
+    0x24: "ready",             # brew DONE — the "coffee ready" beep. The cup is still on
+                               #   the scale; the machine only returns to idle (0x01) once
+                               #   it's lifted, so 'ready' is the real end-of-brew signal.
     0x3B: "brewing",
     0x41: "complete",
     0x43: "saving_slots",

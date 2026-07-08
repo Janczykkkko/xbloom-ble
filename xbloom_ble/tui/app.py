@@ -38,6 +38,7 @@ _STATE_MSG = {
     "no_water": ("⚠ no water in the tank", "red"),
     "starting": ("● grinding / starting…", "cyan"),
     "brewing": ("● brewing…", "cyan"),
+    "ready": ("✓ coffee ready — enjoy!", "green"),
     "complete": ("✓ complete", "green"),
     "idle": ("● idle", "dim"),
 }
@@ -826,10 +827,15 @@ class XBloomApp(App):
                 if ev.state_name in ("no_beans", "no_water"):
                     await self._abort_supply(ev.state_name, head)
                     break
+                if ev.state_name == "ready" and saw_progress:
+                    # 0x24 = the "coffee ready" beep — the brew is done while the cup is
+                    # still on the scale. Complete here so we DON'T wait for the machine to
+                    # return to idle (which only happens once the cup is lifted).
+                    completed = True
+                    break
                 if ev.state_name == "ack_0x41" and saw_progress:
-                    # The machine's "coffee ready" beep is the 0x41 done-echo. On this
-                    # firmware it only returns to idle (below) a beat later — often only
-                    # once the cup is lifted — so treat the beep itself as completion.
+                    # Fallback: some brews skip 0x24 and only send the 0x41 done-echo (which
+                    # arrives at/after cup-off). Complete on it too so we never hang.
                     completed = True
                     break
                 if ev.state_name in ("complete", "cancelled"):
