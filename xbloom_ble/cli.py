@@ -171,7 +171,11 @@ async def _cmd_brew(args) -> int:
                 print(LOAD_BANNER)
             print()
             print("Streaming telemetry (Ctrl-C to stop)…")
-            await client.stream_telemetry(_record, duration=args.timeout)
+            # With --debug, also tap ffe3 to capture the live-scale weight stream (the
+            # grams aren't on ffe2). Log-only; never affects the brew.
+            await client.stream_telemetry(
+                _record, duration=args.timeout, capture_aux=getattr(args, "debug", False)
+            )
     except Exception as exc:  # noqa: BLE001 - surface any BLE error cleanly
         print(f"ERROR: {exc}")
         return 3

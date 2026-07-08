@@ -461,23 +461,47 @@ class XBloomClient:
     # ------------------------------------------------------------------
     # Telemetry streaming
     # ------------------------------------------------------------------
+    def _on_aux_notify(self, _sender, data: bytearray) -> None:
+        """Log-only handler for the ``ffe3`` aux characteristic (capture/diagnostic).
+
+        The live scale weights the app shows are NOT on ``ffe2`` (that carries only
+        state + a pour counter). They may stream on ``ffe3`` — this taps it purely to
+        capture the raw bytes at DEBUG so the format can be decoded. It never feeds the
+        telemetry event stream and never affects the brew.
+        """
+        log.debug("←aux %s", bytes(data).hex())
+
     async def stream_telemetry(
         self,
         on_event: Callable[[StatusEvent], Awaitable[None] | None],
         duration: float = 300.0,
         *,
         stop_on_terminal: bool = True,
+        capture_aux: bool = False,
     ) -> None:
         """Subscribe to ``ffe2`` and invoke ``on_event`` for each status event.
 
         Runs for up to ``duration`` seconds. If ``stop_on_terminal`` is set,
         returns early once a terminal state (complete / idle) is seen.
         ``on_event`` may be a plain or async callable.
+
+        If ``capture_aux`` is set, ALSO subscribe to the ``ffe3`` aux characteristic
+        and log its raw frames at DEBUG (diagnostic only — used with ``--debug`` to
+        hunt for the live-scale weight stream). This is best-effort: if ``ffe3`` can't
+        be subscribed it's logged and ignored, never breaking the brew.
         """
         if self._client is None or not self._client.is_connected:
             raise XBloomError("not connected")
 
         await self._start_notify()
+        aux_on = False
+        if capture_aux:
+            try:
+                await self._client.start_notify(CHAR_AUX, self._on_aux_notify)
+                aux_on = True
+                log.debug("aux capture on (ffe3) — hunting for the live-weight stream")
+            except Exception as exc:  # noqa: BLE001 - diagnostic tap, never fatal
+                log.debug("aux capture unavailable: %s", exc)
         loop = asyncio.get_event_loop()
         deadline = loop.time() + duration
         try:
@@ -500,4 +524,9 @@ class XBloomClient:
                     log.info("terminal state '%s' reached", event.state_name)
                     return
         finally:
+            if aux_on:
+                try:
+                    await self._client.stop_notify(CHAR_AUX)
+                except Exception:  # pragma: no cover - best-effort cleanup
+                    pass
             await self._stop_notify()
