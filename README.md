@@ -17,8 +17,8 @@ machine** (and optionally **start the brew**), and watch live telemetry. It ship
 with a **keyboard-first terminal UI** to do all of that interactively.
 
 <p align="center">
-  <img src="docs/img/tui-walkthrough.gif" alt="xbloom-ble terminal UI walkthrough — browse recipes, brew with a live graph, edit, history" width="720">
-  <br><em>The terminal UI: browse recipes with a live detail view, brew behind a confirm gate with a live graph, edit recipes, and review past brews.</em>
+  <img src="docs/img/tui-brewing.jpg" alt="xbloom-ble terminal UI — a brew in progress with a live water/coffee weight graph" width="860">
+  <br><em>The terminal UI brewing live: real water + coffee weights streamed from the machine's scale, plotted as it pours.</em>
 </p>
 
 It can also — optionally — **sync recipes to your xBloom phone-app account** over
@@ -225,9 +225,9 @@ xbloom tui --recipes ./recipes            # or just: xbloom
 
 Run it against the simulator (no machine) with `--demo` to explore it safely.
 
-| Recipes + detail sidebar | Live brew graph | Brew history + telemetry |
+| Recipes + detail sidebar | Brew confirm gate | Brew history + telemetry |
 |---|---|---|
-| ![Recipes tab](docs/img/tui-recipes.png) | ![Brewing tab](docs/img/tui-brewing.png) | ![History tab](docs/img/tui-history.png) |
+| ![Recipes list with a live detail sidebar](docs/img/tui-recipes.jpg) | ![The 3-way brew confirm gate: Cancel / Load only / Start](docs/img/tui-brew-gate.jpg) | ![History tab with a saved brew's water/coffee curve](docs/img/tui-history.jpg) |
 
 ### Program the dial presets (save-slots)
 
