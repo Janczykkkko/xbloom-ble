@@ -37,6 +37,21 @@ documented protocol so others can build on it.
 
 ---
 
+## Quick start
+
+```console
+pip install 'xbloom-ble[tui]'     # add [cloud] as well for phone-app recipe sync
+xbloom init                       # pair the machine + save its address (optional cloud login)
+xbloom                            # launch the terminal UI
+```
+
+Then load a recipe with `xbloom brew <recipe.yaml>` (the machine prompts; you approve on the
+device), or press <kbd>Enter</kbd> on a recipe in the UI. New here? →
+**[Getting started](#getting-started)** · [Configuration & first run](#configuration-data--first-run)
+· [Usage](#usage) · [Recipe format](#recipe-format) · [Safety model](#️-safety--loading-and-starting-are-separate-deliberate-steps).
+
+---
+
 ## ⚠️ Safety — loading and starting are separate, deliberate steps
 
 `xbloom-ble` can both **load** a recipe and **start** the brew (just like the
