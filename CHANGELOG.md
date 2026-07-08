@@ -8,6 +8,21 @@ Conventional-Commit history — new versions are inserted below.
 
 <!-- version list -->
 
+## v2.1.0 (2026-07-08)
+
+### Documentation
+
+- Real terminal screenshots + README refresh
+  ([#14](https://github.com/Janczykkkko/xbloom-ble/pull/14),
+  [`7cec335`](https://github.com/Janczykkkko/xbloom-ble/commit/7cec3353a7c4050829f46159a5c956a49f8011b5))
+
+### Features
+
+- **tui**: Slim recipe editor + pattern selector + clone
+  ([#15](https://github.com/Janczykkkko/xbloom-ble/pull/15),
+  [`7adc26a`](https://github.com/Janczykkkko/xbloom-ble/commit/7adc26a2183e3a2c4333d5df24524e4be6abb92b))
+
+
 ## v2.0.0 (2026-07-08)
 
 ### Features
