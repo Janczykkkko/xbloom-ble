@@ -9,35 +9,49 @@ before making changes.
 speaks the **reverse-engineered Bluetooth Low Energy protocol** of the
 [xBloom Studio](https://xbloom.com) pour-over coffee machine. There is no official
 xBloom API. The package lets you discover the machine, define a brew as a YAML
-recipe, validate it, **load it onto the machine**, and watch live brew telemetry.
-It is a public, MIT-licensed, open-source project with a clean CLI and a fully
+recipe, validate it, **load it onto the machine**, optionally **start the brew
+remotely** (the app-style Brew button — see the safety invariant below), program the
+three Easy-Mode dial presets, and watch live brew telemetry. It ships a plain CLI and
+a **Textual TUI** (`xbloom tui`), plus an unofficial cloud client for the phone app's
+recipe store. It is a public, MIT-licensed, open-source project with a fully
 documented protocol so others can build on it.
 
-## 🛑 HARD SAFETY INVARIANT — do not break this
+## 🛑 SAFETY INVARIANT — do not break this
 
-**The tool only ever LOADS a recipe. The machine then prompts, and a human
-physically approves the brew ON THE MACHINE to start it. The tool must NEVER start
-a brew.**
+**Loading a recipe only *arms* the machine. It must NEVER start a brew as a side
+effect. Starting a brew is always a separate, explicit, opt-in call — never
+implicit, never a consequence of loading.**
 
-Concretely:
+This package *can* start a brew remotely (the app-style "Brew" button): `start()`
+sends commit (`0x42`) + start (`0x46`), and `cancel_brew()` sends `0x47`. That is a
+deliberate, first-class capability — **but it is only ever reached through an
+explicit `start()`/`brew()` call the caller opts into, and in the TUI/CLI it sits
+behind a confirmation gate.** The invariant is the *separation*, not a ban on the
+opcodes.
 
-- The xBloom BLE protocol has opcodes that force-start a brew: **`0x42` (commit)
-  and `0x46` (start)**. **Never build, emit, or send these opcodes. Never add an
-  auto-start / auto-confirm code path.**
-- `build_load_frames()` returns **exactly four** LOAD frames (`0xa4`, `0xa6`,
-  `0xa8`, and the pours frame — `0x41` when grinding, `0x44` for a no-grind /
-  grinder-off recipe) and nothing else. `0x44` is a pours opcode, NOT a start opcode —
-  it stages, it does not brew. There is a belt-and-braces assertion in it that
-  rejects a forbidden opcode (`0x42` commit / `0x46` start) if one ever crept in — keep it.
-- There is a **test guarding this** (`tests/test_protocol.py::test_no_forbidden_opcodes`,
-  plus `test_load_frames_opcode_order`). **Keep these tests; never weaken or delete
-  them.** If you touch the protocol layer, they must still pass.
-- After a load, the machine reports state `0x1f` (armed) and waits for the human.
-  That on-machine approval is the safety gate — a controller cannot brew on an empty
-  machine. Preserve that property in any change.
+Concretely — the properties every change must preserve:
 
-If a feature request would require auto-starting a brew, **decline it** and explain
-this invariant instead.
+- **`build_load_frames()` returns exactly the LOAD frames and nothing that brews:**
+  `0xa4`, `0xa6`, `0xa8`, and the pours frame (`0x41` when grinding, `0x44` for a
+  no-grind / grinder-off recipe). `0x44` is a *pours* opcode — it stages, it does not
+  brew. There is a belt-and-braces assertion inside `build_load_frames()` that rejects
+  a commit/start/cancel opcode (`0x42`/`0x46`/`0x47`) if one ever crept into the load
+  sequence — **keep it.**
+- **The commit/start/cancel opcodes live ONLY in their own builders** (`build_commit`
+  / `build_start` / `build_cancel`) and are sent ONLY from `XBloomClient.start()` /
+  `cancel_brew()`. Never wire them as a side effect of `load_recipe()`, and never add
+  an auto-start path that fires them without the caller explicitly asking to brew.
+- **Tests guard this** — `tests/test_protocol.py::test_load_frames_are_load_only`
+  (LOAD frames never carry `0x42`/`0x46`/`0x47`) and `test_load_frames_opcode_order`
+  (the four frames are exactly `a4, a6, a8, 41`). **Keep them; never weaken or delete
+  them.** If you touch the protocol layer they must still pass.
+- **Loading leaves the machine armed at `0x1f`.** A human can still approve on the
+  machine (load-only flow); a remote `start()` is the alternative. Either way, loading
+  by itself never dispenses water.
+
+If a feature request would make **loading** start a brew (or fire commit/start as an
+implicit side effect), **decline it** and explain this invariant instead. A request to
+*explicitly* start a brew is fine — that's what `start()` is for.
 
 ## 🔒 No-personal-data rule (this repo is PUBLIC)
 
