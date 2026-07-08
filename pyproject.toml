@@ -22,6 +22,7 @@ classifiers = [
 dependencies = [
     "bleak>=0.21",
     "pyyaml>=6",
+    "platformdirs>=3",
 ]
 
 [project.optional-dependencies]

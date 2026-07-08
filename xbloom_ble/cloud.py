@@ -53,6 +53,8 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import unquote
 from urllib.request import Request, urlopen
 
+from . import paths
+
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .recipe import Pour, Recipe
 
@@ -132,8 +134,9 @@ def _cloud_bool(value: bool) -> int:
     return CLOUD_TRUE if value else CLOUD_FALSE
 
 
-# Default auth-cache location. Overridable per-client and via XBLOOM_CLOUD_AUTH.
-DEFAULT_AUTH_PATH = Path.home() / ".config" / "xbloom-ble" / "cloud-auth.json"
+# Pre-2.2 auth-cache location — still READ as a migration fallback. New saves go to the per-user
+# state dir (``paths.token_file()``, 0600); override per-client or via XBLOOM_CLOUD_AUTH.
+LEGACY_AUTH_PATH = Path.home() / ".config" / "xbloom-ble" / "cloud-auth.json"
 
 
 class XBloomCloudError(RuntimeError):
@@ -365,33 +368,30 @@ class XBloomCloud:
         self.password = self.password or os.environ.get("XBLOOM_PASSWORD")
         if self.auth_path is None:
             env = os.environ.get("XBLOOM_CLOUD_AUTH")
-            self.auth_path = Path(env) if env else DEFAULT_AUTH_PATH
+            self.auth_path = Path(env) if env else paths.token_file()
         # Reuse a cached token if present so callers can skip an explicit login.
         if not self.token or not self.member_id:
             self._load_cached_auth()
 
     # -- auth cache ---------------------------------------------------------
     def _load_cached_auth(self) -> None:
-        try:
-            data = json.loads(Path(self.auth_path).read_text(encoding="utf-8"))
-        except (FileNotFoundError, json.JSONDecodeError, OSError):
+        candidates = [Path(self.auth_path)]
+        if Path(self.auth_path) != LEGACY_AUTH_PATH:   # migrate from the pre-2.2 location
+            candidates.append(LEGACY_AUTH_PATH)
+        for candidate in candidates:
+            try:
+                data = json.loads(candidate.read_text(encoding="utf-8"))
+            except (FileNotFoundError, json.JSONDecodeError, OSError):
+                continue
+            self.token = self.token or str(data.get("token", ""))
+            self.member_id = self.member_id or int(data.get("member_id", 0) or 0)
             return
-        self.token = self.token or str(data.get("token", ""))
-        self.member_id = self.member_id or int(data.get("member_id", 0) or 0)
 
     def _save_cached_auth(self) -> None:
-        path = Path(self.auth_path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(
-                {"member_id": self.member_id, "token": self.token},
-            ),
-            encoding="utf-8",
+        paths.write_private(
+            Path(self.auth_path),
+            json.dumps({"member_id": self.member_id, "token": self.token}),
         )
-        try:
-            path.chmod(0o600)
-        except OSError:  # pragma: no cover - non-POSIX filesystems
-            pass
 
     # -- base form ----------------------------------------------------------
     def _base_form(self) -> dict[str, Any]:
