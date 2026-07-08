@@ -1,12 +1,20 @@
-"""Brew confirmation gate — an explicit "yes, start it" step before hot water.
+"""Brew confirmation gate — an explicit choice before hot water.
 
-Starting a brew dispenses near-boiling water on the real machine, so it must never
-happen on a stray keypress. Pressing brew opens this modal; the brew only launches
-on an explicit confirm. Cancel is the *default* focus so a lingering Enter is safe.
+Pressing brew opens this modal. It offers two ways to brew (both stream the live
+graph + save to history), plus cancel:
+
+* **Load only** — stage the recipe; the machine arms and you approve *on the
+  machine* to start. Safest — you're physically there.
+* **Start** — stage *and* start remotely (commit + start); the machine brews
+  without you touching it.
+
+Dismisses ``"load"``, ``"start"``, or ``None`` (cancel). Cancel is the default
+focus, so a stray Enter never brews.
 """
 
 from __future__ import annotations
 
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
@@ -16,25 +24,27 @@ from textual.widgets import Button, Static
 from ..recipe import Recipe
 
 
-class ConfirmBrewScreen(ModalScreen[bool]):
-    """Ask the user to confirm starting a brew. Dismisses ``True`` to start."""
+class ConfirmBrewScreen(ModalScreen[str]):
+    """Ask how to brew. Dismisses ``"load"``, ``"start"``, or ``None`` (cancel)."""
 
     DEFAULT_CSS = """
     ConfirmBrewScreen { align: center middle; }
     ConfirmBrewScreen > #dialog {
-        width: 62; height: auto; padding: 1 2;
+        width: 68; height: auto; max-height: 90%; padding: 1 2;
         background: $panel; border: heavy $warning;
     }
     ConfirmBrewScreen #cb-title { text-style: bold; color: $warning; }
-    ConfirmBrewScreen #cb-body { margin: 1 0; }
+    ConfirmBrewScreen #cb-detail { margin: 1 0 0 0; }
+    ConfirmBrewScreen #cb-ask { margin: 1 0; }
     ConfirmBrewScreen #cb-buttons { height: auto; align-horizontal: center; }
     ConfirmBrewScreen Button { margin: 0 1; }
     """
 
     BINDINGS = [
-        Binding("left,up", "focus_cancel", show=False),
-        Binding("right,down", "focus_start", show=False),
-        Binding("y", "start", "start", show=True),
+        Binding("left,up", "nav_prev", show=False),
+        Binding("right,down", "nav_next", show=False),
+        Binding("l,o", "load", "load only", show=True),
+        Binding("s,y", "start", "start", show=True),
         Binding("n,escape", "cancel", "cancel", show=True),
         # (enter presses the focused button — Button binds it natively)
     ]
@@ -44,37 +54,71 @@ class ConfirmBrewScreen(ModalScreen[bool]):
         self._recipe = recipe
 
     def compose(self) -> ComposeResult:
-        r = self._recipe
-        grind = "no-grind" if r.no_grind else f"grind {r.grind}"
         with Vertical(id="dialog"):
             yield Static("🔥 Start brew?", id="cb-title")
+            yield Static(self._detail(), id="cb-detail")
             yield Static(
-                f"[b]{r.name}[/]\n"
-                f"{r.dose_g} g · 1:{r.effective_ratio:g} · {grind} · {r.total_water_ml} ml\n\n"
-                "[$warning]This dispenses hot water on the machine.[/] "
-                "Beans in, cup/dripper in place?",
-                id="cb-body",
+                Text.assemble(
+                    ("Beans in, cup/dripper in place? ", "bold #ffb300"),
+                    ("Load only", "bold white"),
+                    (" arms the machine (approve on it); ", "dim"),
+                    ("Start", "bold white"),
+                    (" brews remotely — both dispense hot water.", "dim"),
+                ),
+                id="cb-ask",
             )
             with Horizontal(id="cb-buttons"):
                 yield Button("Cancel", variant="default", id="cancel")
+                yield Button("Load only", variant="primary", id="load")
                 yield Button("🔥 Start", variant="warning", id="start")
+
+    def _detail(self) -> Text:
+        """The recipe, so you can confirm what you're about to brew before hot water."""
+        r = self._recipe
+        t = Text()
+        t.append(f"{r.name}\n", style="bold #d78700")
+        grind = "no-grind" if r.no_grind else str(r.grind)
+        water = r.water_ml or r.total_water_ml
+        line = f"{r.dose_g} g · 1:{r.effective_ratio:g} · grind {grind} · {water} ml"
+        if r.dripper:
+            line += f" · {r.dripper}"
+        t.append(line + "\n", style="dim")
+        t.append(f"stage temps {r.stage_temps[0]:g} / {r.stage_temps[1]:g} °C\n", style="dim")
+        t.append("\nPours\n", style="bold")
+        for i, p in enumerate(r.pours, 1):
+            label = p.label or f"Pour {i}"
+            t.append(f" {i} ", style="cyan")
+            t.append(f"{label:<8}", style="white")
+            t.append(f"{p.ml:>3} ml  {p.temp_c}°  {p.pattern}", style="dim")
+            extras = []
+            if p.pause_s:
+                extras.append(f"{p.pause_s}s")
+            if p.agitation:
+                extras.append("agit")
+            if extras:
+                t.append(f"  {' '.join(extras)}", style="yellow")
+            t.append("\n")
+        return t
 
     def on_mount(self) -> None:
         # Default focus on Cancel: a stray Enter cancels, never starts.
         self.query_one("#cancel", Button).focus()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        # Enter/click on a button — Cancel or Start.
-        self.dismiss(event.button.id == "start")
+        # Enter/click on a button: cancel → None, load → "load", start → "start".
+        self.dismiss(None if event.button.id == "cancel" else event.button.id)
 
-    def action_focus_cancel(self) -> None:
-        self.query_one("#cancel", Button).focus()
+    def action_nav_prev(self) -> None:
+        self.focus_previous()
 
-    def action_focus_start(self) -> None:
-        self.query_one("#start", Button).focus()
+    def action_nav_next(self) -> None:
+        self.focus_next()
+
+    def action_load(self) -> None:
+        self.dismiss("load")
 
     def action_start(self) -> None:
-        self.dismiss(True)
+        self.dismiss("start")
 
     def action_cancel(self) -> None:
-        self.dismiss(False)
+        self.dismiss(None)

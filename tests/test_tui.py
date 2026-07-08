@@ -228,6 +228,37 @@ def test_journey_b_brews(store):
     assert drive(store, s)[-1] > 0
 
 
+def test_journey_help_opens_and_closes(store):
+    from xbloom_ble.tui.help import HelpScreen
+
+    async def s(app, pilot):
+        await pilot.press("h")
+        for _ in range(30):
+            await pilot.pause(0.02)
+            if isinstance(app.screen, HelpScreen):
+                break
+        opened = isinstance(app.screen, HelpScreen)
+        body = str(app.screen.query_one("#help-body").render())
+        await pilot.press("escape")
+        await pilot.pause(0.1)
+        return opened, body, isinstance(app.screen, HelpScreen)
+    opened, body, still_open = drive(store, s)
+    assert opened and not still_open
+    assert "confirm gate" in body.lower() and "hot water" in body.lower()
+
+
+def test_journey_confirm_gate_shows_recipe_details(store):
+    async def s(app, pilot):
+        await pilot.press("b")
+        for _ in range(40):
+            await pilot.pause(0.02)
+            if isinstance(app.screen, ConfirmBrewScreen):
+                break
+        return str(app.screen.query_one("#cb-detail").render())
+    detail = drive(store, s)
+    assert "Pours" in detail and "ml" in detail        # the pour schedule is shown
+
+
 def test_journey_brew_needs_confirmation(store):
     """The brew is gated: pressing brew opens a confirm modal and does NOT start
     on its own. Cancelling the gate leaves the machine untouched."""
@@ -249,7 +280,7 @@ def test_journey_brew_needs_confirmation(store):
 
 
 def test_journey_brew_gate_arrow_to_start_then_enter(store):
-    """The gate is navigable: arrow to Start, press Enter → brew launches."""
+    """The gate is navigable: arrow past Load to Start, press Enter → brew launches."""
     ctrl = FakeController(speed=0.03, auto_start=5.0)
 
     async def s(app, pilot):
@@ -258,13 +289,31 @@ def test_journey_brew_gate_arrow_to_start_then_enter(store):
             await pilot.pause(0.02)
             if isinstance(app.screen, ConfirmBrewScreen):
                 break
-        await pilot.press("right")            # move focus Cancel → Start
+        await pilot.press("right", "right")   # focus Cancel → Load → Start
         await pilot.pause(0.05)
         await pilot.press("enter")            # Enter on the focused Start button
         await await_brew(app, pilot)
         return ctrl.started, app._water[-1]
     started, final = drive(store, s, controller=ctrl)
     assert started is True and final > 0
+
+
+def test_journey_brew_load_only_streams_without_remote_start(store):
+    """'Load only' arms the machine (no commit+start) but still streams telemetry
+    and completes — for approving on the machine while keeping the live graph."""
+    ctrl = FakeController(speed=0.03, auto_start=0.05)  # short: sim 'approval' fires the brew
+
+    async def s(app, pilot):
+        await pilot.press("b")
+        for _ in range(40):
+            await pilot.pause(0.02)
+            if isinstance(app.screen, ConfirmBrewScreen):
+                break
+        await pilot.press("l")                # Load only
+        await await_brew(app, pilot)
+        return ctrl.started, app._water[-1], app._view
+    started, final, view = drive(store, s, controller=ctrl)
+    assert started is False and final > 0 and view == "brewing"
 
 
 def test_journey_brew_starts_remotely(store):

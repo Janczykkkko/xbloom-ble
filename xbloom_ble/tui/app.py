@@ -9,6 +9,7 @@ list; the recipe editor as a modal with a discard guard. Runs against any
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 
 from rich.text import Text
@@ -21,12 +22,38 @@ from textual_plotext import PlotextPlot
 from .confirm import ConfirmBrewScreen
 from .controller import MachineController
 from .editor import EditorScreen
+from .help import HelpScreen
 from .history import HistoryPane, HistoryStore
 from .slots import SLOTS, SlotStore
 from .store import RecipeStore
 
 LOGO = "☕ xBloom"
 TABS = ["recipes", "brewing", "history"]
+
+
+class _PanelLogHandler(logging.Handler):
+    """Routes ``xbloom_ble`` log records into the TUI's activity panel.
+
+    The BLE client logs via ``logging``; without this those records would hit
+    stderr and paint over the Textual screen. We schedule the write onto the app's
+    event loop (``call_soon_threadsafe`` works from the app thread *and* bleak's
+    callback thread), so hardware chatter shows up in the activity log instead.
+    """
+
+    _STYLES = {logging.ERROR: "red", logging.WARNING: "yellow", logging.DEBUG: "dim"}
+
+    def __init__(self, app: XBloomApp, loop: asyncio.AbstractEventLoop) -> None:
+        super().__init__()
+        self._app = app
+        self._loop = loop
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            msg = record.getMessage()
+            style = self._STYLES.get(record.levelno, "cyan")
+            self._loop.call_soon_threadsafe(self._app._log, msg, style)
+        except Exception:  # logging must never crash the app
+            pass
 
 
 class Header(Horizontal):
@@ -211,6 +238,8 @@ class XBloomApp(App):
         Binding("k", "cursor_up", "up", show=False),
         Binding("r", "reload", "reload"),
         Binding("l", "toggle_log", "log"),
+        Binding("h", "help", "help"),
+        Binding("question_mark", "help", "help", show=False),
         Binding("q", "quit", "quit"),
     ]
 
@@ -250,11 +279,14 @@ class XBloomApp(App):
                     yield BrewView(id="brew")
                 with TabPane("🕘 History", id="history"):
                     yield HistoryPane(id="history-pane")
-            yield RichLog(id="logpanel", markup=True, wrap=True, max_lines=500)
+            # min_width small so lines shrink to the panel width and WRAP (the default
+            # 78 renders wide and the narrow panel just clips it instead of wrapping).
+            yield RichLog(id="logpanel", markup=True, wrap=True, min_width=12, max_lines=500)
         yield Static("", id="crumbs")
         yield Input(placeholder="", id="cmd")
 
     def on_mount(self) -> None:
+        self._attach_log_capture()
         self.query_one("#logpanel", RichLog).write(Text("● activity log", style="bold cyan"))
         self._reload()
         self._log(f"loaded {len(self._entries)} recipes from {self.store.dir}", "green")
@@ -262,6 +294,20 @@ class XBloomApp(App):
         self.query_one(RecipesView).focus()
         if self.auto_brew:
             self.set_timer(0.4, self.action_brew)
+
+    def _attach_log_capture(self) -> None:
+        """Redirect the xbloom_ble logger into the activity panel (off the raw screen)."""
+        lg = logging.getLogger("xbloom_ble")
+        self._saved_log = (lg.handlers[:], lg.level, lg.propagate)
+        lg.handlers = [_PanelLogHandler(self, asyncio.get_running_loop())]
+        lg.setLevel(logging.INFO)
+        lg.propagate = False        # don't let records reach the root/stderr handler
+
+    def on_unmount(self) -> None:
+        saved = getattr(self, "_saved_log", None)
+        if saved:
+            lg = logging.getLogger("xbloom_ble")
+            lg.handlers, lg.level, lg.propagate = saved
 
     # ── helpers ────────────────────────────────────────────────────
     @property
@@ -293,6 +339,10 @@ class XBloomApp(App):
 
     def action_toggle_log(self) -> None:
         self.query_one("#logpanel", RichLog).toggle_class("hidden")
+
+    def action_help(self) -> None:
+        if not self._modal_open():
+            self.push_screen(HelpScreen())
 
     # ── tabs ───────────────────────────────────────────────────────
     def _modal_open(self) -> bool:
@@ -336,15 +386,15 @@ class XBloomApp(App):
             "recipes": [
                 ("enter", "brew ▶"), ("e", "edit"), ("n", "new"), ("1/2/3", "→ slot"),
                 ("p", "push slots"), ("/", "filter"), ("i", "import"), ("d", "delete"),
-                ("tab", "next tab"), ("q", "quit"),
+                ("tab", "next tab"), ("h", "help"), ("q", "quit"),
             ],
             "brewing": [
                 ("c", "cancel"), ("esc", "recipes"), ("tab", "next tab"),
-                ("l", "log"), ("q", "quit"),
+                ("l", "log"), ("h", "help"), ("q", "quit"),
             ],
             "history": [
                 ("j/k", "select"), ("esc", "recipes"), ("tab", "next tab"),
-                ("l", "log"), ("q", "quit"),
+                ("l", "log"), ("h", "help"), ("q", "quit"),
             ],
         }.get(self._view, [])
         self.query_one(Header).set_keys(keys)
@@ -585,14 +635,15 @@ class XBloomApp(App):
         # Gate: starting a brew dispenses hot water — require an explicit confirm.
         self.push_screen(ConfirmBrewScreen(self._current), self._brew_confirmed)
 
-    def _brew_confirmed(self, go: bool | None) -> None:
-        if not go or self._brewing or self._current is None:
-            if go is False:
+    def _brew_confirmed(self, mode: str | None) -> None:
+        # mode: "start" (remote commit+start), "load" (arm; approve on machine), None (cancel)
+        if mode not in ("start", "load") or self._brewing or self._current is None:
+            if mode is None:
                 self._log("brew cancelled", "yellow")
             return
         self._set_view("brewing")
         self._t, self._water, self._coffee = [], [], []
-        self.run_worker(self._brew(), exclusive=True, name="brew")
+        self.run_worker(self._brew(remote_start=mode == "start"), exclusive=True, name="brew")
 
     def action_cancel(self) -> None:
         if self._brewing:
@@ -626,7 +677,7 @@ class XBloomApp(App):
             plt.horizontal_line(self._current.total_water_ml, color="gray")
         plot.refresh()
 
-    async def _brew(self) -> None:
+    async def _brew(self, *, remote_start: bool) -> None:
         r = self._current
         self._brewing = True
         self._sync_chrome()
@@ -640,11 +691,17 @@ class XBloomApp(App):
             self._brew_status(f"{head}\n[dim]staging…[/]")
             self._log(f"staging {r.name} ({grind}, 1:{r.effective_ratio:g})")
             await self.controller.stage(r)
-            self._brew_status(f"{head}\n[yellow]● armed — starting…[/]")
-            self._log("armed — starting brew ▶", "yellow")
-            await self.controller.start()
-            self._brew_status(f"{head}\n[cyan]● brewing…[/]")
-            self._log("brew started ▶", "cyan")
+            if remote_start:
+                self._brew_status(f"{head}\n[yellow]● armed — starting…[/]")
+                self._log("armed — starting brew ▶", "yellow")
+                await self.controller.start()
+                self._brew_status(f"{head}\n[cyan]● brewing…[/]")
+                self._log("brew started ▶", "cyan")
+            else:
+                # Load-only: the machine is armed; the human approves ON THE MACHINE.
+                # Telemetry keeps streaming, so the graph + history fill in either way.
+                self._brew_status(f"{head}\n[yellow]● armed — approve on the machine ▶[/]")
+                self._log("armed — approve on the machine to start ▶", "yellow")
             t0 = time.monotonic()
             last_state = None
             async for ev in self.controller.telemetry():
