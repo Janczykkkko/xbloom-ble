@@ -23,15 +23,35 @@ def test_env_overrides_win_on_every_os(monkeypatch, tmp_path):
 
 
 def test_platformdirs_default_when_unset(monkeypatch):
-    for v in ("XBLOOM_CONFIG_DIR", "XBLOOM_DATA_DIR", "XBLOOM_STATE_DIR"):
+    for v in ("XBLOOM_CONFIG_DIR", "XBLOOM_DATA_DIR", "XBLOOM_STATE_DIR", "XBLOOM_HOME"):
         monkeypatch.delenv(v, raising=False)
     # Just assert it resolves to *something* namespaced to the app, without asserting the OS path.
     assert paths.APP in str(paths.config_dir()).lower() or paths.config_dir().name
     assert paths.recipes_dir().name == "recipes"
 
 
+def test_xbloom_home_single_base(monkeypatch, tmp_path):
+    for v in ("XBLOOM_CONFIG_DIR", "XBLOOM_DATA_DIR", "XBLOOM_STATE_DIR"):
+        monkeypatch.delenv(v, raising=False)
+    monkeypatch.setenv("XBLOOM_HOME", str(tmp_path / "home"))
+    base = tmp_path / "home"
+    assert paths.config_file() == base / "config.yaml"
+    assert paths.recipes_dir() == base / "recipes"
+    assert paths.history_file() == base / "history.json"
+    assert paths.slots_file() == base / "slots.json"
+    assert paths.token_file() == base / "cloud-auth.json"
+
+
+def test_per_type_override_beats_xbloom_home(monkeypatch, tmp_path):
+    monkeypatch.setenv("XBLOOM_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XBLOOM_DATA_DIR", str(tmp_path / "data"))
+    assert paths.recipes_dir() == tmp_path / "data" / "recipes"      # per-type wins
+    assert paths.config_file() == tmp_path / "home" / "config.yaml"  # …others still under HOME
+
+
 def test_macos_honors_xdg(monkeypatch, tmp_path):
     monkeypatch.delenv("XBLOOM_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("XBLOOM_HOME", raising=False)
     monkeypatch.setattr(paths.sys, "platform", "darwin")
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
     assert paths.config_dir() == tmp_path / "xdg" / "xbloom"

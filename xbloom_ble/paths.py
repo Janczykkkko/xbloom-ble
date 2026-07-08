@@ -4,8 +4,10 @@ Resolves the **config / data / state** directories via ``platformdirs``, so file
 right OS-native place (XDG on Linux, ``~/Library`` on macOS, ``%APPDATA%``/``%LOCALAPPDATA%`` on
 Windows). Two deviations make it behave like the CLI tools people already run:
 
-* an ``XBLOOM_CONFIG_DIR`` / ``XBLOOM_DATA_DIR`` / ``XBLOOM_STATE_DIR`` env override is honored
-  first on every OS (the ``GH_CONFIG_DIR`` / ``CARGO_HOME`` convention);
+* a per-type ``XBLOOM_CONFIG_DIR`` / ``XBLOOM_DATA_DIR`` / ``XBLOOM_STATE_DIR`` env override is
+  honored first on every OS (the ``GH_CONFIG_DIR`` / ``CARGO_HOME`` convention); or a single
+  ``XBLOOM_HOME`` roots **all** of config/data/state under one directory (so ``config.yaml``,
+  ``recipes/``, ``history.json``, ``slots.json`` and the token all land there);
 * on macOS, ``XDG_CONFIG_HOME`` / ``XDG_DATA_HOME`` / ``XDG_STATE_HOME`` are honored when set, so
   a terminal user who keeps everything under ``~/.config`` gets that instead of ``~/Library``.
 
@@ -32,30 +34,38 @@ import platformdirs
 APP = "xbloom"
 
 
-def _resolve(override_env: str, xdg_env: str, default: Path) -> Path:
+def _resolve(override_env: str, xdg_env: str, default_factory) -> Path:
+    """Resolve one base dir. Precedence: the per-type ``XBLOOM_*_DIR`` override → the single-base
+    ``XBLOOM_HOME`` (config/data/state all land under it) → ``XDG_*`` on macOS → the platform
+    default. ``default_factory`` is a callable so ``platformdirs`` is only invoked when actually
+    needed (calling it eagerly can raise on some Windows CI setups / a spoofed platform)."""
     override = os.environ.get(override_env)
     if override:
         return Path(override).expanduser()
+    home = os.environ.get("XBLOOM_HOME")   # single base → config/data/state all land under it
+
+    if home:
+        return Path(home).expanduser()
     if sys.platform == "darwin":
         base = os.environ.get(xdg_env)
         if base:
             return Path(base).expanduser() / APP
-    return default
+    return default_factory()
 
 
 def config_dir() -> Path:
     return _resolve("XBLOOM_CONFIG_DIR", "XDG_CONFIG_HOME",
-                    Path(platformdirs.user_config_dir(APP, appauthor=False)))
+                    lambda: Path(platformdirs.user_config_dir(APP, appauthor=False)))
 
 
 def data_dir() -> Path:
     return _resolve("XBLOOM_DATA_DIR", "XDG_DATA_HOME",
-                    Path(platformdirs.user_data_dir(APP, appauthor=False)))
+                    lambda: Path(platformdirs.user_data_dir(APP, appauthor=False)))
 
 
 def state_dir() -> Path:
     return _resolve("XBLOOM_STATE_DIR", "XDG_STATE_HOME",
-                    Path(platformdirs.user_state_dir(APP, appauthor=False)))
+                    lambda: Path(platformdirs.user_state_dir(APP, appauthor=False)))
 
 
 def config_file() -> Path:
