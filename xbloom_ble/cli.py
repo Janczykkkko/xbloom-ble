@@ -43,12 +43,23 @@ START_BANNER = (
 )
 
 
-def _setup_logging(verbose: bool) -> None:
+def _setup_logging(verbose: bool, debug: bool = False) -> None:
     logging.basicConfig(
-        level=logging.DEBUG if verbose else logging.INFO,
+        level=logging.DEBUG if (verbose or debug) else logging.INFO,
         format="%(message)s",
         stream=sys.stderr,
     )
+    if debug:
+        # Tee the full BLE chatter (every sent frame + every raw notification) to a
+        # timestamped file, so a session can be captured and shared for diagnosis.
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        path = Path.cwd() / f"xbloom-debug-{stamp}.log"
+        handler = logging.FileHandler(path, encoding="utf-8")
+        handler.setLevel(logging.DEBUG)
+        handler.setFormatter(logging.Formatter("%(asctime)s.%(msecs)03d %(message)s",
+                                               datefmt="%H:%M:%S"))
+        logging.getLogger("xbloom_ble").addHandler(handler)
+        print(f"🐛 BLE debug log → {path}")
 
 
 # ---------------------------------------------------------------------------
@@ -338,6 +349,8 @@ def build_parser() -> argparse.ArgumentParser:
                        help="run against a simulated machine (no hardware needed)")
     s_tui.add_argument("--auto-brew", action="store_true",
                        help="start a brew immediately (demos/tests)")
+    s_tui.add_argument("--debug", action="store_true",
+                       help="also log the full BLE chatter to a file (xbloom-debug-*.log)")
 
     s_scan = sub.add_parser("scan", help="discover xBloom machines")
     s_scan.add_argument("--timeout", type=float, default=8.0, help="scan seconds (default 8)")
@@ -357,6 +370,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="telemetry stream seconds (default 300)")
     s_brew.add_argument("--scan-timeout", type=float, default=8.0,
                         help="scan seconds when no address given (default 8)")
+    s_brew.add_argument("--debug", action="store_true",
+                        help="log the full BLE chatter to a file (xbloom-debug-*.log)")
 
     s_slot = sub.add_parser(
         "save-slots",
@@ -376,6 +391,8 @@ def build_parser() -> argparse.ArgumentParser:
     s_slot.add_argument("--address", help="machine BLE address (or set XBLOOM_ADDRESS)")
     s_slot.add_argument("--scan-timeout", type=float, default=8.0,
                         help="scan seconds when no address given (default 8)")
+    s_slot.add_argument("--debug", action="store_true",
+                        help="log the full BLE chatter to a file (xbloom-debug-*.log)")
 
     # cloud — unofficial xBloom cloud REST API (pushes to the app account)
     s_cloud = sub.add_parser(
@@ -422,7 +439,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    _setup_logging(getattr(args, "verbose", False))
+    _setup_logging(getattr(args, "verbose", False), getattr(args, "debug", False))
 
     if args.command == "validate":
         return _cmd_validate(args)
@@ -457,6 +474,7 @@ def _cmd_tui(args) -> int:
         address=getattr(args, "address", None) or os.environ.get("XBLOOM_ADDRESS"),
         demo=getattr(args, "demo", False),
         auto_brew=getattr(args, "auto_brew", False),
+        debug=getattr(args, "debug", False),
     )
 
 

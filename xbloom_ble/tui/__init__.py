@@ -14,6 +14,7 @@ def run_tui(
     address: str | None = None,
     demo: bool = False,
     auto_brew: bool = False,
+    debug: bool = False,
 ) -> int:
     """Build the store + controller and run the app. Returns a process exit code."""
     try:
@@ -32,5 +33,5 @@ def run_tui(
     store = RecipeStore(recipes_dir or DEFAULT_RECIPES_DIR)
     store.ensure()
     controller = FakeController(speed=0.2, auto_start=1.5) if demo else RealController(address)
-    XBloomApp(store, controller, auto_brew=auto_brew).run()
+    XBloomApp(store, controller, auto_brew=auto_brew, debug=debug).run()
     return 0

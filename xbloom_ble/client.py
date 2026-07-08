@@ -131,7 +131,11 @@ class XBloomClient:
     # Notifications
     # ------------------------------------------------------------------
     def _on_notify(self, _sender, data: bytearray) -> None:
-        event = parse_notification(bytes(data))
+        raw = bytes(data)
+        event = parse_notification(raw)
+        # Full raw chatter at DEBUG (enable with `--debug`) — this is how we capture
+        # the brew-record frames we don't parse yet, so they can be decoded later.
+        log.debug("← %s%s", raw.hex(), f"  [{event.state_name}]" if event is not None else "")
         if event is not None:
             self._notif_queue.put_nowait(event)
 
@@ -225,14 +229,18 @@ class XBloomClient:
     # ------------------------------------------------------------------
     # Starting / cancelling a brew  (explicit — dispenses hot water)
     # ------------------------------------------------------------------
-    async def start(self, *, settle: float = 1.5) -> StatusEvent:
+    async def start(self, *, settle: float = 6.0) -> StatusEvent:
         """Start the currently-armed brew: commit (``0x42``) then start (``0x46``).
 
         The machine must already be armed (call :meth:`load_recipe` first). Sends
-        the commit frame (machine → ``0x1e`` awaiting-confirm), waits briefly for
-        that state (up to ``settle`` extra seconds, but proceeds regardless), then
-        sends the start frame and returns once the machine reports **brewing**
-        (``0x3b``). This mirrors the vendor app's Brew button.
+        commit, waits (up to ``settle``) for the machine to reach ``0x1e``
+        (awaiting-confirm, with its countdown) as the app does, then sends start.
+
+        It then makes a **best-effort** attempt to observe ``0x3b`` (brewing), but
+        **never raises if it doesn't** — once commit+start are on the wire the brew
+        is running, and the machine typically blows straight past ``0x3b`` into
+        brew-record frames. The caller should stream telemetry for the live state;
+        blocking here (and failing) would abandon a brew that is actually underway.
 
         ⚠️ This physically dispenses near-boiling water. Only call it when the
         machine is ready (water tank filled, dripper/cup in place) and someone
@@ -245,16 +253,23 @@ class XBloomClient:
         try:
             log.info("→ 0x42 commit (arming the brew)")
             await self._client.write_gatt_char(CHAR_COMMAND, build_commit(), response=False)
+            # Wait for awaiting-confirm before the start frame (the app does too).
             try:
                 await self._drain_until_state(STATE_AWAITING_CONFIRM, settle)
             except XBloomError:
-                log.debug("awaiting-confirm not observed; sending start anyway")
-            await asyncio.sleep(0.4)
+                log.info("awaiting-confirm not observed; sending start anyway")
+            await asyncio.sleep(0.5)
             log.info("→ 0x46 start (brew go)")
             await self._client.write_gatt_char(CHAR_COMMAND, build_start(), response=False)
-            brewing = await self._drain_until_state(STATE_BREWING, self.ack_timeout)
-            log.info("brew started")
-            return brewing
+            # Best-effort observe brewing — but the brew is already commanded, so a
+            # miss here is NOT an error (do not abandon a running brew).
+            try:
+                brewing = await self._drain_until_state(STATE_BREWING, 4.0)
+                log.info("brew started (brewing)")
+                return brewing
+            except XBloomError:
+                log.info("brew started (commit+start sent) — streaming telemetry for live state")
+                return StatusEvent(state=STATE_BREWING, state_name="brewing", raw=b"")
         finally:
             await self._stop_notify()
 

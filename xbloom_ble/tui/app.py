@@ -248,12 +248,13 @@ class XBloomApp(App):
     def __init__(
         self, store: RecipeStore, controller: MachineController, *,
         auto_brew: bool = False, history: HistoryStore | None = None,
-        slots: SlotStore | None = None,
+        slots: SlotStore | None = None, debug: bool = False,
     ) -> None:
         super().__init__()
         self.store = store
         self.controller = controller
         self.auto_brew = auto_brew
+        self._debug = debug
         self.history = history or HistoryStore(store.dir.parent / "xbloom-history.json")
         self.slots = slots or SlotStore(store.dir.parent / "xbloom-slots.json")
         self._entries: list = []
@@ -296,11 +297,25 @@ class XBloomApp(App):
             self.set_timer(0.4, self.action_brew)
 
     def _attach_log_capture(self) -> None:
-        """Redirect the xbloom_ble logger into the activity panel (off the raw screen)."""
+        """Redirect the xbloom_ble logger into the activity panel (off the raw screen).
+
+        With ``debug`` on, also lower the level to DEBUG and tee the full BLE chatter
+        to a timestamped file so a session can be captured and shared.
+        """
         lg = logging.getLogger("xbloom_ble")
         self._saved_log = (lg.handlers[:], lg.level, lg.propagate)
-        lg.handlers = [_PanelLogHandler(self, asyncio.get_running_loop())]
-        lg.setLevel(logging.INFO)
+        handlers: list[logging.Handler] = [_PanelLogHandler(self, asyncio.get_running_loop())]
+        if self._debug:
+            from pathlib import Path
+            path = Path.cwd() / f"xbloom-debug-{time.strftime('%Y%m%d-%H%M%S')}.log"
+            fh = logging.FileHandler(path, encoding="utf-8")
+            fh.setLevel(logging.DEBUG)
+            fh.setFormatter(logging.Formatter("%(asctime)s.%(msecs)03d %(message)s",
+                                              datefmt="%H:%M:%S"))
+            handlers.append(fh)
+            self._log(f"🐛 BLE debug log → {path}", "magenta")
+        lg.handlers = handlers
+        lg.setLevel(logging.DEBUG if self._debug else logging.INFO)
         lg.propagate = False        # don't let records reach the root/stderr handler
 
     def on_unmount(self) -> None:
@@ -715,23 +730,31 @@ class XBloomApp(App):
             async for ev in self.controller.telemetry():
                 if not self.is_running:
                     break
-                if ev.water_g is None:
-                    continue
-                self._t.append(round(time.monotonic() - t0, 1))
-                self._water.append(ev.water_g)
-                self._coffee.append(ev.coffee_g or 0.0)
-                self._replot()
-                self._brew_status(f"{head}\n[cyan]● {ev.state_name}[/]  water {ev.water_g:g} g")
+                # Track state transitions ALWAYS — even when live weights aren't
+                # decoded (on real hardware water_g may be None), so we still log the
+                # brew, update the status, and exit on complete instead of spinning.
                 if ev.state_name != last_state:
                     last_state = ev.state_name
-                    self._log(f"{ev.state_name} · water {ev.water_g:g} g", "cyan")
+                    extra = f" · water {ev.water_g:g} g" if ev.water_g is not None else ""
+                    self._log(f"{ev.state_name}{extra}", "cyan")
+                if ev.water_g is not None:
+                    self._t.append(round(time.monotonic() - t0, 1))
+                    self._water.append(ev.water_g)
+                    self._coffee.append(ev.coffee_g or 0.0)
+                    self._replot()
+                    self._brew_status(f"{head}\n[cyan]● {ev.state_name}[/]  water {ev.water_g:g} g")
+                else:
+                    self._brew_status(f"{head}\n[cyan]● {ev.state_name}[/]")
                 if ev.state_name in ("complete", "cancelled"):
                     break
             if last_state == "complete":
-                self._log(f"✓ brew complete — {self._water[-1]:g} g", "green")
+                final_water = self._water[-1] if self._water else 0.0
+                suffix = f" — {final_water:g} g" if self._water else " (no live weights)"
+                self._log(f"✓ brew complete{suffix}", "green")
                 self.history.record(
-                    recipe=r.name, dose_g=r.dose_g, water_g=self._water[-1],
-                    ratio=r.effective_ratio, duration_s=self._t[-1] if self._t else 0,
+                    recipe=r.name, dose_g=r.dose_g, water_g=final_water,
+                    ratio=r.effective_ratio,
+                    duration_s=self._t[-1] if self._t else round(time.monotonic() - t0, 1),
                     telemetry={"t": list(self._t), "water": list(self._water),
                                "coffee": list(self._coffee)},
                 )
