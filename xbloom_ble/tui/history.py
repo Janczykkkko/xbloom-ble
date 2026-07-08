@@ -121,3 +121,9 @@ class HistoryPane(Horizontal):
             if any(coffee):
                 plt.plot(t, coffee, label="coffee", color="orange", marker="braille")
         plot.refresh()
+
+    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        # Redraw the detail graph whenever the highlighted row changes — by j/k, arrow keys,
+        # OR a mouse click. Without this the graph stays stuck on the first brew (the app's
+        # j/k handler only covers its own two keys; arrows and clicks bypass it entirely).
+        self.show_detail(event.cursor_row)

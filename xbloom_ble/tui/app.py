@@ -49,6 +49,11 @@ _STATE_MSG = {
 # real HW) — but once start() has seen a real 'starting'/'brewing' frame the guard is
 # disarmed (see `saw_progress` in _brew), so this only bounds the truly-stuck case.
 _GRIND_GUARD_S = 30.0
+# Once the pours are done (water ≈ target) and the cup weight has not risen for this many
+# seconds, the drawdown has finished (= the "coffee ready" beep) and the brew is complete.
+# This machine only emits a definite 0x41 'done' on CUP-LIFT, so without this a hands-off brew
+# would stream forever waiting for a cup that never lifts; the scale is the ground truth.
+_DRAWDOWN_PLATEAU_S = 6.0
 
 
 class _PanelLogHandler(logging.Handler):
@@ -407,7 +412,13 @@ class XBloomApp(App):
 
     def on_tabbed_content_tab_activated(self, event) -> None:
         if self._view == "history":
-            self.query_one(HistoryPane).load(self.history.list())
+            pane = self.query_one(HistoryPane)
+            pane.load(self.history.list())
+            from .history import HistoryList
+            try:                                    # focus the list so j/k AND arrows drive it
+                pane.query_one(HistoryList).focus()
+            except Exception:                       # noqa: BLE001
+                pass
         self._sync_chrome()
         if self._view == "recipes":
             self.query_one(RecipesView).focus()
@@ -796,6 +807,10 @@ class XBloomApp(App):
             completed = False           # the brew reached a natural end (record history)
             last_water = last_coffee = 0.0   # running scale values (frames are separate)
             last_replot = 0.0
+            # measured-completion state: target water (dose×ratio) + drawdown-plateau tracking.
+            target_water = (r.dose_g or 0) * (r.effective_ratio or 0)
+            coffee_peak = 0.0
+            last_rise = t0
             async for ev in self.controller.telemetry():
                 if not self.is_running:
                     break
@@ -815,6 +830,18 @@ class XBloomApp(App):
                     if now - last_replot > 0.4:   # throttle: the stream is ~10 Hz
                         self._replot()
                         last_replot = now
+                    # Measured completion: this machine's only definite 'done' (0x41) fires on
+                    # CUP-LIFT, so a hands-off brew would hang. Instead — once the pours are done
+                    # (water ≈ target) AND the cup weight has stopped rising for a few seconds
+                    # (drip finished = the beep), the brew is over. Ground truth from the scale.
+                    if last_coffee > coffee_peak + 0.3:
+                        coffee_peak = last_coffee
+                        last_rise = now
+                    if (target_water > 0 and last_water >= 0.85 * target_water
+                            and last_coffee >= 0.5 * (r.dose_g or 0)
+                            and now - last_rise >= _DRAWDOWN_PLATEAU_S):
+                        completed = True
+                        break
                 # A real scale frame (state_name "scale") carries no state — done. The
                 # sim emits state + weights in one event, so only skip pure scale frames.
                 if ev.state_name == "scale":
@@ -845,8 +872,9 @@ class XBloomApp(App):
                     completed = True
                     break
                 if ev.state_name == "ack_0x41" and saw_progress:
-                    # Fallback: some brews skip 0x24 and only send the 0x41 done-echo (which
-                    # arrives at/after cup-off). Complete on it too so we never hang.
+                    # 0x41 = the machine's 'done' echo — on THIS machine it only arrives on
+                    # CUP-LIFT (or after), so the drawdown-plateau above usually completes first.
+                    # Kept as an immediate trigger for when the cup IS lifted right at the beep.
                     completed = True
                     break
                 if ev.state_name in ("complete", "cancelled"):
