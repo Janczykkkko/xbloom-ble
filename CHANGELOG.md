@@ -8,6 +8,15 @@ Conventional-Commit history — new versions are inserted below.
 
 <!-- version list -->
 
+## v2.2.1 (2026-07-08)
+
+### Bug Fixes
+
+- **cloud**: Default --cup to xdripper (omni was never valid) + README quick-start
+  ([#18](https://github.com/Janczykkkko/xbloom-ble/pull/18),
+  [`643a0dc`](https://github.com/Janczykkkko/xbloom-ble/commit/643a0dc9bddb45b7445d92bf90117a624998a7f9))
+
+
 ## v2.2.0 (2026-07-08)
 
 ### Features
