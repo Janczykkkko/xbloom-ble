@@ -769,7 +769,11 @@ class XBloomApp(App):
                 if ev.state_name in ("awaiting_confirm", "starting", "brewing",
                                      "no_beans", "no_water"):
                     brew_began = True
-                if ev.state_name == "brewing" or ev.water_g is not None:
+                if ev.state_name in ("starting", "brewing") or ev.water_g is not None:
+                    # 'starting' (0x22) = the machine is grinding/spinning up on our
+                    # commit — real progress. Counting it here keeps the 20 s "didn't
+                    # start" guard below from cancelling a legitimate brew that spends
+                    # its first seconds grinding + blooming before the first 0x3b.
                     saw_progress = True
                 # Track state transitions ALWAYS — even when live weights aren't decoded
                 # (on real hardware water_g may be None) — so we log the brew, show a

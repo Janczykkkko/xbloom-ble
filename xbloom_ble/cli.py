@@ -158,6 +158,15 @@ async def _cmd_brew(args) -> int:
                 print()
                 brewing = await client.start()
                 _record(brewing)
+                # The machine checks water/beans right after commit. If it refused,
+                # start() already consumed that one status frame (the telemetry stream
+                # won't repeat it) — so cancel back to idle and stop here instead of
+                # streaming forever waiting for a brew that will never begin.
+                if brewing.state_name in ("no_water", "no_beans"):
+                    what = "water in the tank" if brewing.state_name == "no_water" else "beans"
+                    print(f"\n⚠️  Machine refused: no {what}. Aborting (0x47).")
+                    await client.cancel_brew()
+                    return 0
             else:
                 print(LOAD_BANNER)
             print()
