@@ -8,6 +8,15 @@ Conventional-Commit history — new versions are inserted below.
 
 <!-- version list -->
 
+## v2.1.1 (2026-07-08)
+
+### Bug Fixes
+
+- **tui**: Complete brew on weight-plateau + fix history row selection
+  ([#16](https://github.com/Janczykkkko/xbloom-ble/pull/16),
+  [`1a3151c`](https://github.com/Janczykkkko/xbloom-ble/commit/1a3151c52bdd8b6067a8fbb4c6b309144adcbf7d))
+
+
 ## v2.1.0 (2026-07-08)
 
 ### Documentation
