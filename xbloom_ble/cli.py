@@ -43,22 +43,32 @@ START_BANNER = (
 )
 
 
+def _silence_ble_stack() -> None:
+    """Keep the BlueZ/D-Bus stack's own DEBUG chatter off the console — we only want
+    OUR frames. (Without this, ``--debug``/``-v`` would flood stderr with dbus noise.)"""
+    for name in ("bleak", "bleak.backends", "dbus_fast", "dbus_next"):
+        logging.getLogger(name).setLevel(logging.WARNING)
+
+
 def _setup_logging(verbose: bool, debug: bool = False) -> None:
     logging.basicConfig(
-        level=logging.DEBUG if (verbose or debug) else logging.INFO,
+        level=logging.DEBUG if verbose else logging.INFO,
         format="%(message)s",
         stream=sys.stderr,
     )
+    _silence_ble_stack()
     if debug:
-        # Tee the full BLE chatter (every sent frame + every raw notification) to a
-        # timestamped file, so a session can be captured and shared for diagnosis.
+        # DEBUG for OUR logger only (never the BLE stack), teed to a timestamped file
+        # so a session's full frame chatter can be captured and shared for diagnosis.
+        xlog = logging.getLogger("xbloom_ble")
+        xlog.setLevel(logging.DEBUG)
         stamp = time.strftime("%Y%m%d-%H%M%S")
         path = Path.cwd() / f"xbloom-debug-{stamp}.log"
         handler = logging.FileHandler(path, encoding="utf-8")
         handler.setLevel(logging.DEBUG)
         handler.setFormatter(logging.Formatter("%(asctime)s.%(msecs)03d %(message)s",
                                                datefmt="%H:%M:%S"))
-        logging.getLogger("xbloom_ble").addHandler(handler)
+        xlog.addHandler(handler)
         print(f"🐛 BLE debug log → {path}")
 
 
@@ -439,6 +449,13 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    # The TUI owns the screen and manages its own logging (activity panel + optional
+    # debug file), so it must NOT get a stderr log handler — that would paint over it.
+    if args.command in (None, "tui"):
+        _silence_ble_stack()
+        return _cmd_tui(args)
+
     _setup_logging(getattr(args, "verbose", False), getattr(args, "debug", False))
 
     if args.command == "validate":
@@ -459,9 +476,7 @@ def main(argv: list[str] | None = None) -> int:
             return 130
     if args.command == "cloud":
         return _cmd_cloud(args)
-    if args.command in (None, "tui"):
-        return _cmd_tui(args)
-    parser.error("unknown command")
+    parser.error("unknown command")  # tui/None handled above
     return 2  # pragma: no cover
 
 

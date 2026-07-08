@@ -302,6 +302,10 @@ class XBloomApp(App):
         With ``debug`` on, also lower the level to DEBUG and tee the full BLE chatter
         to a timestamped file so a session can be captured and shared.
         """
+        # Keep the BlueZ/D-Bus stack's DEBUG chatter off the screen — we only capture
+        # our own frames (otherwise --debug floods the UI with dbus signals).
+        for noisy in ("bleak", "bleak.backends", "dbus_fast", "dbus_next"):
+            logging.getLogger(noisy).setLevel(logging.WARNING)
         lg = logging.getLogger("xbloom_ble")
         self._saved_log = (lg.handlers[:], lg.level, lg.propagate)
         handlers: list[logging.Handler] = [_PanelLogHandler(self, asyncio.get_running_loop())]
