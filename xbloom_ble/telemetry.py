@@ -23,14 +23,23 @@ State byte (inside a ``0x57`` frame, right after ``0xc1``)
 Byte  Name                          Meaning
 ====  ============================  =========================================
 0x01  idle                          Idle / ready (also seen at brew end).
+0x0c  no_water                      Refused: no water (checked right after commit).
+0x0f  no_beans                      Refused: wants beans (machine WAITS here).
+0x10  brewing                       Live pour / brew in progress (see note below).
 0x1d  loading                       Recipe being received.
 0x1f  armed                         Recipe loaded, armed, awaiting approval.
 0x1e  awaiting_confirm              Waiting for the human to confirm on device.
-0x3b  brewing                       Brew in progress.
+0x22  starting                      Post-commit: grinding / spinning up.
+0x3b  brewing                       Brew in progress (seen on the app-capture firmware).
 0x41  complete                      Brew complete.
 0x43  saving_slots                  Easy-Mode slot batch being stored.
 0x25  slots_saved                   Easy-Mode slots stored OK (then → idle).
 ====  ============================  =========================================
+
+Note on the brew sequence (observed on firmware V12.0D.500): after commit the
+machine goes ``awaiting_confirm (0x1e) → starting (0x22)``, then **grinds and blooms
+SILENTLY** — it emits only heartbeats, no status frames, for ~20 s — before it reports
+the pour as ``0x10``. Consumers must not treat that silence as a stalled brew.
 
 The state ``0x1f`` (armed) is what :meth:`XBloomClient.load_recipe` waits for
 after sending the four LOAD frames — the machine is armed and prompting the
@@ -54,6 +63,8 @@ STATE_NAMES: dict[int, str] = {
     0x01: "idle",
     0x0C: "no_water",          # machine has no water (checked before grinding)
     0x0F: "no_beans",          # machine wants beans (add beans, or cancel) — it WAITS here
+    0x10: "brewing",           # live pour / brew in progress (observed on HW: the machine
+                               #   grinds SILENTLY after 0x22, then reports 0x10 as it pours)
     0x1D: "loading",
     0x1F: "armed",
     0x1E: "awaiting_confirm",

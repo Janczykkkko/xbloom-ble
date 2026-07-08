@@ -42,6 +42,13 @@ _STATE_MSG = {
     "idle": ("● idle", "dim"),
 }
 
+# After a remote start, if we NEVER get a real sign the brew began (start() saw
+# nothing, and telemetry stays empty), cancel after this long rather than streaming
+# forever. It must exceed the machine's SILENT grind+bloom (heartbeats only, ~20 s on
+# real HW) — but once start() has seen a real 'starting'/'brewing' frame the guard is
+# disarmed (see `saw_progress` in _brew), so this only bounds the truly-stuck case.
+_GRIND_GUARD_S = 30.0
+
 
 class _PanelLogHandler(logging.Handler):
     """Routes ``xbloom_ble`` log records into the TUI's activity panel.
@@ -742,6 +749,7 @@ class XBloomApp(App):
             self._brew_status(f"{head}\n[dim]staging…[/]")
             self._log(f"staging {r.name} ({grind}, 1:{r.effective_ratio:g})")
             await self.controller.stage(r)
+            started = None
             if remote_start:
                 self._brew_status(f"{head}\n[yellow]● armed — starting…[/]")
                 self._log("armed — starting brew ▶", "yellow")
@@ -762,7 +770,17 @@ class XBloomApp(App):
             t0 = time.monotonic()
             last_state = None
             brew_began = remote_start   # a remote start means the brew is already underway
-            saw_progress = False        # saw real brewing (a brewing state or live water)
+            # ⚠️ start() CONSUMES the machine's post-commit status frame, and on real
+            # hardware the machine then goes SILENT (heartbeats only) all through the
+            # grind + first bloom — often >20 s before the next status frame (the pour).
+            # So seed "saw real progress" from what start() actually observed; otherwise
+            # the 20 s guard below never sees a status in time and cancels a real brew
+            # mid-grind. Only a genuine machine frame (raw != b"") counts — the synthetic
+            # fallback start() returns when it saw nothing must NOT disarm the guard.
+            saw_progress = bool(
+                started is not None and started.raw
+                and started.state_name in ("starting", "brewing")
+            )
             async for ev in self.controller.telemetry():
                 if not self.is_running:
                     break
@@ -797,7 +815,7 @@ class XBloomApp(App):
                 if ev.state_name == "idle" and brew_began:
                     # machine went back to idle after the brew ran / was cancelled
                     break
-                if remote_start and not saw_progress and (time.monotonic() - t0) > 20:
+                if remote_start and not saw_progress and (time.monotonic() - t0) > _GRIND_GUARD_S:
                     # We commanded a remote start but the machine never actually brewed
                     # (it reverts to armed ~1-2s later when there are no beans / it isn't
                     # ready). Stop instead of streaming forever; nudge to check the setup.

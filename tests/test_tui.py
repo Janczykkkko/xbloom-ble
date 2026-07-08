@@ -17,9 +17,11 @@ pytest.importorskip("textual_plotext")
 
 from textual.widgets import Button, Input  # noqa: E402
 
+from xbloom_ble.telemetry import StatusEvent  # noqa: E402
+from xbloom_ble.tui import app as app_mod  # noqa: E402
 from xbloom_ble.tui.app import RecipesView, XBloomApp  # noqa: E402
 from xbloom_ble.tui.confirm import ConfirmBrewScreen  # noqa: E402
-from xbloom_ble.tui.controller import FakeController  # noqa: E402
+from xbloom_ble.tui.controller import FakeController, MachineController  # noqa: E402
 from xbloom_ble.tui.editor import EditorScreen, PourRow  # noqa: E402
 from xbloom_ble.tui.history import HistoryList, HistoryStore  # noqa: E402
 from xbloom_ble.tui.slots import SlotStore  # noqa: E402
@@ -327,6 +329,80 @@ def test_journey_brew_starts_remotely(store):
         return ctrl.started, app._water[-1]
     started, final = drive(store, s, controller=ctrl)
     assert started is True and final > 0
+
+
+class _SilentGrindController(MachineController):
+    """Reproduces real hardware for the silent-grind regression.
+
+    On the machine, ``start()`` reports ``starting`` as a REAL status frame and then
+    the machine grinds + blooms SILENTLY (heartbeats only, which telemetry drops) for
+    ~20 s before the pour. So the telemetry stream yields nothing for a long while, and
+    the first frame it DOES yield (the pour) may be an undecoded state. The brew must
+    not be cancelled mid-grind by the "didn't start" guard.
+    """
+
+    def __init__(self, grind_silence: float) -> None:
+        self.address = "AA:BB:CC:DD:EE:FF"
+        self.cancelled = False
+        self.started = False
+        self._silence = grind_silence
+
+    async def scan(self):
+        return [self.address]
+
+    async def connect(self, address=None):
+        pass
+
+    async def stage(self, recipe):
+        recipe.validate()
+        return StatusEvent(state=0x1F, state_name="armed", raw=b"\x58armed")
+
+    async def start(self):
+        self.started = True
+        # A REAL post-commit status frame (non-empty raw) — exactly what client.start()
+        # returns once the machine reaches 0x22. This is the seed the guard relies on.
+        return StatusEvent(state=0x22, state_name="starting", raw=b"\x58starting")
+
+    async def telemetry(self, duration: float = 300.0):
+        await asyncio.sleep(self._silence)          # the silent grind — no status frames
+        # The pour finally shows up as an UNDECODED frame (as 0x10 was, pre-decode) — it
+        # must reach the guard without having set saw_progress, to prove the seed works.
+        yield StatusEvent(state=0x99, state_name="unknown_0x99", raw=b"\x58pour")
+        await asyncio.sleep(0.02)
+        yield StatusEvent(state=0x41, state_name="complete", raw=b"\x58done")
+
+    async def cancel(self):
+        self.cancelled = True
+
+    async def save_slots(self, recipes):
+        pass
+
+    async def disconnect(self):
+        pass
+
+
+def test_journey_remote_brew_survives_silent_grind(store, monkeypatch):
+    """Regression (hw log 2026-07-08 09:15): a real brew was cancelled mid-grind.
+
+    The machine grinds SILENTLY past the guard window, and start() had already consumed
+    the one 'starting' frame — so saw_progress stayed False and the guard fired 0x47 as
+    the pour began. Fix: seed saw_progress from start()'s real return. With the guard
+    shrunk below the silent-grind time, the brew must still complete and NOT be cancelled.
+    """
+    monkeypatch.setattr(app_mod, "_GRIND_GUARD_S", 0.15)
+    ctrl = _SilentGrindController(grind_silence=0.4)   # 0.4s silence >> 0.15s guard
+
+    async def s(app, pilot):
+        await start_brew(app, pilot, "b")
+        for _ in range(400):
+            await pilot.pause(0.02)
+            if not app._brewing:
+                break
+        return app._brewing, ctrl.cancelled
+
+    brewing, cancelled = drive(store, s, controller=ctrl)
+    assert cancelled is False        # the guard must NOT have cancelled the silent-grind brew
+    assert brewing is False          # …and it ran to completion
 
 
 def test_journey_escape_leaves_brewing_but_keeps_it_running(store):
