@@ -45,8 +45,11 @@ NAME_PREFIX = "XBLOOM"
 
 # State byte that means "recipe loaded / armed".
 STATE_ARMED = 0x1F
-# Brew lifecycle states: 0x1e awaiting-confirm (after commit), 0x3b brewing.
+# Brew lifecycle states: 0x1e awaiting-confirm (after commit), 0x22 starting/grinding,
+# 0x3b brewing. On some machines commit auto-proceeds through these; on others the
+# machine waits in awaiting-confirm and needs the 0x46 start frame.
 STATE_AWAITING_CONFIRM = 0x1E
+STATE_STARTING = 0x22
 STATE_BREWING = 0x3B
 # Slot-save status states (see telemetry): 0x43 saving, 0x25 saved, 0x01 idle.
 STATE_IDLE = 0x01
@@ -229,53 +232,67 @@ class XBloomClient:
     # ------------------------------------------------------------------
     # Starting / cancelling a brew  (explicit — dispenses hot water)
     # ------------------------------------------------------------------
-    async def start(self, *, settle: float = 6.0, confirm_hold: float = 5.0) -> StatusEvent:
-        """Start the currently-armed brew: commit (``0x42``) then start (``0x46``).
+    async def _drain_for_any(self, states: set[int], timeout: float) -> StatusEvent | None:
+        """Return the first status event whose state is in ``states``, or ``None`` on
+        timeout. Skips heartbeats; consumes intervening frames."""
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + timeout
+        while True:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return None
+            try:
+                event = await asyncio.wait_for(self._notif_queue.get(), timeout=remaining)
+            except asyncio.TimeoutError:
+                return None
+            if event.is_heartbeat:
+                continue
+            log.debug("status: %s", event.state_name)
+            if event.state in states:
+                return event
 
-        The machine must already be armed (call :meth:`load_recipe` first). Sends
-        commit, waits (up to ``settle``) for ``0x1e`` (awaiting-confirm), then
-        **holds ``confirm_hold`` seconds** for the machine's ~99 s add-beans
-        countdown to actually start ticking (``0x39`` frames), and only then sends
-        start — mirroring the vendor app, which sends ``0x46`` several seconds into
-        the countdown. **Sending ``0x46`` too early makes the machine ack it and
-        silently revert to armed without brewing** (verified against a capture).
+    async def start(self, *, settle: float = 8.0) -> StatusEvent:
+        """Start the currently-armed brew (call :meth:`load_recipe` first).
 
-        It then makes a **best-effort** attempt to observe ``0x3b`` (brewing), but
-        **never raises if it doesn't** — once commit+start are on the wire the brew
-        is running, and the machine typically blows straight past ``0x3b`` into
-        brew-record frames. The caller should stream telemetry for the live state.
+        Sends commit (``0x42``) and then **adapts to the machine**: after commit some
+        machines auto-proceed straight through awaiting-confirm → grinding → brewing,
+        while others sit in awaiting-confirm waiting for a start press. So we *watch*
+        for up to ``settle`` seconds:
 
-        ⚠️ This physically dispenses near-boiling water. Only call it when the
-        machine is ready (water tank filled, dripper/cup in place) and someone
-        intends to brew — starting is never triggered as a side effect of loading.
+        * If the machine reaches **grinding (0x22)** or **brewing (0x3b)** on its own,
+          the brew is underway — we do **not** send ``0x46`` (sending it into a running
+          brew aborts it back to armed — verified on hardware).
+        * Only if it **stalls in awaiting-confirm** do we send the ``0x46`` start frame
+          to nudge it (this is what the vendor app's capture needed).
+
+        Returns best-effort once brewing/grinding is seen; never raises just because a
+        state wasn't observed (the caller streams telemetry for the live state).
+
+        ⚠️ This physically dispenses near-boiling water. Only call it when the machine
+        is ready (water/beans/cup in) and someone intends to brew.
         """
         if self._client is None or not self._client.is_connected:
             raise XBloomError("not connected")
 
         await self._start_notify()
         try:
-            log.info("→ 0x42 commit (arming the brew)")
+            log.info("→ 0x42 commit (start the brew)")
             await self._client.write_gatt_char(CHAR_COMMAND, build_commit(), response=False)
-            # Wait for awaiting-confirm before the start frame (the app does too).
-            try:
-                await self._drain_until_state(STATE_AWAITING_CONFIRM, settle)
-            except XBloomError:
-                log.info("awaiting-confirm not observed; proceeding")
-            # Let the add-beans countdown get going before start (see docstring) — the
-            # app sends 0x46 ~6 s into the countdown, not immediately.
-            log.info("holding %.1fs for the add-beans countdown before start…", confirm_hold)
-            await asyncio.sleep(confirm_hold)
-            log.info("→ 0x46 start (brew go)")
+            # Does the machine auto-proceed to grinding/brewing after commit?
+            ev = await self._drain_for_any({STATE_STARTING, STATE_BREWING}, settle)
+            if ev is not None:
+                log.info("machine started on its own after commit (%s) — not sending 0x46",
+                         ev.state_name)
+                return ev
+            # It stalled in awaiting-confirm — nudge it with the start frame.
+            log.info("machine waiting in confirm — → 0x46 start")
             await self._client.write_gatt_char(CHAR_COMMAND, build_start(), response=False)
-            # Best-effort observe brewing — but the brew is already commanded, so a
-            # miss here is NOT an error (do not abandon a running brew).
-            try:
-                brewing = await self._drain_until_state(STATE_BREWING, 4.0)
-                log.info("brew started (brewing)")
-                return brewing
-            except XBloomError:
-                log.info("brew started (commit+start sent) — streaming telemetry for live state")
-                return StatusEvent(state=STATE_BREWING, state_name="brewing", raw=b"")
+            ev = await self._drain_for_any({STATE_STARTING, STATE_BREWING}, 5.0)
+            if ev is not None:
+                log.info("brew started (%s)", ev.state_name)
+                return ev
+            log.info("start sent — streaming telemetry for live state")
+            return StatusEvent(state=STATE_BREWING, state_name="brewing", raw=b"")
         finally:
             await self._stop_notify()
 
