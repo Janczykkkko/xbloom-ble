@@ -8,6 +8,15 @@ Conventional-Commit history — new versions are inserted below.
 
 <!-- version list -->
 
+## v2.0.0 (2026-07-08)
+
+### Features
+
+- Terminal UI, remote brew start/cancel, and richer recipe metadata
+  ([#13](https://github.com/Janczykkkko/xbloom-ble/pull/13),
+  [`4765bdd`](https://github.com/Janczykkkko/xbloom-ble/commit/4765bdd9a17a3277e7d44f88fb06a746c9a76fa0))
+
+
 ## v1.1.1 (2026-07-07)
 
 ### Bug Fixes
