@@ -65,13 +65,35 @@ def test_unknown_state():
     assert parse_notification(_status(0x77)).state_name == "unknown_0x77"
 
 
-# --- heartbeats & ACKs (identified by the TYPE byte, offset 3) -------------
+# --- live scale streams (0x4b water, 0x15 coffee) & ACKs -------------------
 
-def test_heartbeats_flagged():
-    for hb in (0x15, 0x4B):
-        ev = parse_notification(_notif(hb, sub=0x50))
-        assert ev.is_heartbeat
-        assert ev.state_name == "idle_heartbeat"
+def test_water_scale_decodes_grams():
+    # 0x4b = water: float32 LE in MILLIgrams. 0x4708b800 = 35000.0 -> 35.0 g (bloom).
+    ev = parse_notification("5802074b9e10000000c100b808470000")
+    assert ev.water_g == 35.0
+    assert ev.coffee_g is None
+    assert not ev.is_heartbeat
+
+
+def test_coffee_scale_decodes_grams():
+    # 0x15 = coffee: float32 LE already in grams. 0x4141ef9e = 12.121 g (bloom plateau).
+    ev = parse_notification("580207155010000000c19eef41410000")
+    assert ev.coffee_g == 12.12
+    assert ev.water_g is None
+
+
+def test_scale_end_of_brew_values():
+    # end-of-brew captures: water 256.0 g (= the 256 ml total), coffee 226.45 g.
+    assert parse_notification("5802074b9e10000000c100007a480000").water_g == 256.0
+    assert parse_notification("580207155010000000c12d7262430000").coffee_g == 226.45
+
+
+def test_scale_zero_reading_kept_but_noise_dropped():
+    # A genuine 0.0 g reading (empty scale at brew start) is kept…
+    assert parse_notification("5802074b9e10000000c100000000fd32").water_g == 0.0
+    # …but untared/idle drift decoding to an implausible value is dropped to None.
+    noise = parse_notification("580207155010000000c1d7a319c20000")
+    assert noise.water_g is None and noise.coffee_g is None
 
 
 def test_command_echo_is_ack():
@@ -106,8 +128,8 @@ def test_golden_captured_frames():
         ("580207571f10000000c11e0000007542", "awaiting_confirm", 0x1E),
         ("580207a61f0c000000c12b8f", "ack_0xa6", None),   # a6 (dose) ACK
         ("580207411f0c000000c1ab6a", "ack_0x41", None),   # 41 (pours) ACK
-        ("5802074b9e10000000c100000000fd32", "idle_heartbeat", 0x4B),
-        ("580207155010000000c10000000016b5", "idle_heartbeat", 0x15),
+        ("5802074b9e10000000c100000000fd32", "scale", None),   # 0x4b water: 0.0 g
+        ("580207155010000000c10000000016b5", "scale", None),   # 0x15 coffee: 0.0 g
     ]
     for hx, name, state in cases:
         ev = parse_notification(hx)

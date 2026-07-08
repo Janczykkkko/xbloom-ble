@@ -8,10 +8,13 @@ dose_g: 16
 grind: 62
 ratio: 15
 stage_temps: [110.0, 90.0]
+# Optional brew-level metadata (informational — never sent to the machine).
+kind: custom
+dripper: Omni
+water_ml: 240
+time: "~2:30"
+note: Clean and balanced. Agitate the bloom, then two even spiral pours.
 pours:
-  # Bloom: small pour, spiral with agitation, long pause to degas.
-  - {ml: 45,  temp_c: 93, pattern: spiral, agitation: true, pause_s: 40, rpm: 100, flow_ml_s: 3.0}
-  # First main pour.
-  - {ml: 100, temp_c: 91, pattern: spiral, pause_s: 10, rpm: 100, flow_ml_s: 3.2}
-  # Second main pour.
-  - {ml: 95,  temp_c: 90, pattern: spiral, pause_s: 5,  rpm: 100, flow_ml_s: 3.2}
+  - {label: Bloom,  ml: 45,  temp_c: 93, pattern: spiral, agitation: true, pause_s: 40, rpm: 100, flow_ml_s: 3.0}
+  - {label: Pour 1, ml: 100, temp_c: 91, pattern: spiral, pause_s: 10, rpm: 100, flow_ml_s: 3.2}
+  - {label: Pour 2, ml: 95,  temp_c: 90, pattern: spiral, pause_s: 5,  rpm: 100, flow_ml_s: 3.2}

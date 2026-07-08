@@ -13,12 +13,21 @@ YAML schema
     grind: 62
     stage_temps: [110.0, 90.0]   # optional; defaults to [110.0, 90.0]
     ratio: 15                    # optional; if given, Σpours must equal dose_g*ratio
+    # optional brew-level metadata (informational — NOT sent to the machine):
+    dripper: Omni
+    kind: custom
+    water_ml: 240
+    time: "~2:00"
+    note: strawberry-forward, ground finer as it aged
     pours:
-      - {ml: 35,  temp_c: 90, pattern: spiral, pause_s: 40, rpm: 100, flow_ml_s: 3.0}
-      - {ml: 115, temp_c: 90, pattern: spiral, pause_s: 5,  rpm: 100, flow_ml_s: 3.0}
+      - {label: Bloom,  ml: 35,  temp_c: 90, pattern: spiral, pause_s: 40, rpm: 100, flow_ml_s: 3.0}
+      - {label: Pour 1, ml: 115, temp_c: 90, pattern: spiral, pause_s: 5,  rpm: 100, flow_ml_s: 3.0}
 
 Patterns: ``spiral``, ``ring``, ``center``. Set ``agitation: true`` (only valid
-with ``spiral``) for an agitated bloom.
+with ``spiral``) for an agitated bloom. The metadata fields (``dripper``, ``kind``,
+``water_ml``, ``hot_water_ml``, ``ice_g``, ``time``, ``note``, and per-pour
+``label``) are optional context that round-trips through YAML but never reaches
+the machine.
 """
 
 from __future__ import annotations
@@ -49,6 +58,9 @@ class Pour:
     pause_s: int = 0
     rpm: int = 0
     flow_ml_s: float = 3.0
+    #: Optional human label for this pour (e.g. "Bloom", "Pour 1"). Informational
+    #: only — never sent to the machine.
+    label: str | None = None
 
     def to_protocol_dict(self) -> dict[str, Any]:
         """Shape expected by :func:`xbloom_ble.protocol.build_41`."""
@@ -62,10 +74,39 @@ class Pour:
             "flow": self.flow_ml_s,
         }
 
+    def to_dict(self) -> dict[str, Any]:
+        """Serialise to the YAML pour shape (round-trips with :meth:`Recipe.from_dict`)."""
+        d: dict[str, Any] = {}
+        if self.label is not None:
+            d["label"] = self.label
+        d.update(
+            ml=int(self.ml),
+            temp_c=int(self.temp_c),
+            pattern=self.pattern,
+            pause_s=int(self.pause_s),
+            rpm=int(self.rpm),
+            flow_ml_s=float(self.flow_ml_s),
+            agitation=bool(self.agitation),
+        )
+        return d
+
 
 @dataclass
 class Recipe:
-    """A full xBloom Studio recipe."""
+    """A full xBloom Studio recipe.
+
+    The core fields (``dose_g``/``grind``/``stage_temps``/``pours``) are what the
+    machine brews. The remaining fields are **optional brew-level metadata** —
+    informational context a UI or recipe site can render, but which is *never*
+    sent to the machine and *not* range-checked against hardware limits:
+
+    * ``dripper`` — the dripper/brewer used (e.g. "Omni").
+    * ``kind`` — recipe kind / preset base (e.g. "custom", "medium-auto").
+    * ``water_ml`` — total brew water (may exceed Σ pours for bypass/iced brews).
+    * ``hot_water_ml`` / ``ice_g`` — iced-brew specifics (hot water over ice).
+    * ``time`` — expected brew time as a display string (e.g. "~2:00").
+    * ``note`` — free-text notes about the recipe.
+    """
 
     name: str
     dose_g: int
@@ -74,6 +115,14 @@ class Recipe:
     stage_temps: tuple[float, float] = (110.0, 90.0)
     ratio: float | None = None
     tail: int = 0xA0
+    # Optional brew-level metadata (informational — never sent to the machine).
+    dripper: str | None = None
+    kind: str | None = None
+    water_ml: int | None = None
+    hot_water_ml: int | None = None
+    ice_g: int | None = None
+    time: str | None = None
+    note: str | None = None
 
     # ------------------------------------------------------------------
     # Construction
@@ -103,6 +152,7 @@ class Recipe:
                         pause_s=rp.get("pause_s", 0),
                         rpm=rp.get("rpm", 0),
                         flow_ml_s=rp.get("flow_ml_s", 3.0),
+                        label=rp.get("label"),
                     )
                 )
             except KeyError as exc:
@@ -124,6 +174,14 @@ class Recipe:
             stage_temps=(float(stage_temps[0]), float(stage_temps[1])),
             ratio=data.get("ratio"),
             tail=data.get("tail", 0xA0),
+            # Optional brew-level metadata (informational — not sent to the machine).
+            dripper=data.get("dripper"),
+            kind=data.get("kind"),
+            water_ml=data.get("water_ml"),
+            hot_water_ml=data.get("hot_water_ml"),
+            ice_g=data.get("ice_g"),
+            time=data.get("time"),
+            note=data.get("note"),
         )
         recipe.validate()
         return recipe
@@ -241,6 +299,14 @@ class Recipe:
                     f"{self.dose_g}*{self.ratio} = {expected} ml"
                 )
 
+        # Optional metadata: only sanity-check the numeric ones (not hardware
+        # limits — these never reach the machine). Deliberately lenient so
+        # informational context can't break a valid, brewable recipe.
+        for label, v in (("water_ml", self.water_ml), ("hot_water_ml", self.hot_water_ml),
+                         ("ice_g", self.ice_g)):
+            if v is not None and (not isinstance(v, (int, float)) or v < 0):
+                errors.append(f"{label} must be a non-negative number, got {v!r}")
+
         if errors:
             raise RecipeError("; ".join(errors))
 
@@ -282,3 +348,22 @@ class Recipe:
             "stage_temps": tuple(self.stage_temps),
             "pours": [p.to_protocol_dict() for p in self.pours],
         }
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialise to the YAML recipe shape (round-trips with :meth:`from_dict`).
+
+        Emits the core fields plus any optional brew-level metadata that is set
+        (omitting ``None``), so a recipe read from YAML and written back is stable.
+        """
+        d: dict[str, Any] = {"name": self.name, "dose_g": int(self.dose_g),
+                             "grind": int(self.grind)}
+        if self.ratio is not None:
+            d["ratio"] = self.ratio
+        d["stage_temps"] = [float(self.stage_temps[0]), float(self.stage_temps[1])]
+        # optional metadata, in a stable, readable order (only when present)
+        for key in ("kind", "dripper", "water_ml", "hot_water_ml", "ice_g", "time", "note"):
+            val = getattr(self, key)
+            if val is not None:
+                d[key] = val
+        d["pours"] = [p.to_dict() for p in self.pours]
+        return d

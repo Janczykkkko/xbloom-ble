@@ -60,6 +60,8 @@ __all__ = [
     "XBloomCloud",
     "XBloomCloudError",
     "recipe_to_cloud",
+    "recipe_from_cloud",
+    "parse_share_id",
     "rsa_encrypt",
     "encrypt_form",
     "BASE_URL",
@@ -302,6 +304,39 @@ def parse_share_id(share_url_or_id: str) -> str:
     if "id=" in s:
         s = s.split("id=")[-1].split("&")[0]
     return unquote(s)
+
+
+def recipe_from_cloud(payload: dict[str, Any]) -> Recipe:
+    """Convert a cloud recipe (from :meth:`XBloomCloud.fetch_public`) into a Recipe.
+
+    The reverse of :func:`recipe_to_cloud` (lossy where the cloud is: pattern code 2
+    round-trips to ``spiral``). The ratio is derived from the pours, not the cloud
+    ``grandWater``, so the result always validates.
+    """
+    from .recipe import Recipe
+    rv = payload.get("recipeVo", payload)
+    raw = rv.get("pourDataJSONStr")
+    pours_src = json.loads(raw) if isinstance(raw, str) else (rv.get("pourList") or [])
+    rpm = min(120, max(60, int(rv.get("rpm") or 100)))
+    pours = []
+    for p in pours_src:
+        pattern = "center" if int(p.get("pattern", 2)) == 1 else "spiral"
+        pours.append({
+            "ml": int(round(float(p.get("volume", 0)))),
+            "temp_c": int(round(float(p.get("temperature", 92)))),
+            "pattern": pattern,
+            "pause_s": int(p.get("pausing", 5)),
+            "rpm": 0 if pattern == "center" else rpm,
+            "flow_ml_s": float(p.get("flowRate", 3.0)),
+            "agitation": int(p.get("isEnableVibrationAfter", CLOUD_FALSE)) == CLOUD_TRUE,
+        })
+    no_grind = rv.get("isSetGrinderSize") == CLOUD_FALSE or rv.get("grinderSize") in (None, 0)
+    return Recipe.from_dict({
+        "name": str(rv.get("theName") or "Imported recipe"),
+        "dose_g": int(round(float(rv.get("dose", 16)))),
+        "grind": 0 if no_grind else int(round(float(rv.get("grinderSize")))),
+        "pours": pours,
+    })
 
 
 @dataclass

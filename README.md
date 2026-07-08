@@ -13,7 +13,13 @@
 There is no official xBloom API. This package speaks the machine's
 reverse-engineered Bluetooth Low Energy protocol so you can script and version
 your recipes — discover the machine, validate a recipe, **load it onto the
-machine**, and watch live brew telemetry.
+machine** (and optionally **start the brew**), and watch live telemetry. It ships
+with a **keyboard-first terminal UI** to do all of that interactively.
+
+<p align="center">
+  <img src="docs/img/tui-walkthrough.gif" alt="xbloom-ble terminal UI walkthrough — browse recipes, brew with a live graph, edit, history" width="720">
+  <br><em>The terminal UI: browse recipes with a live detail view, brew behind a confirm gate with a live graph, edit recipes, and review past brews.</em>
+</p>
 
 It can also — optionally — **sync recipes to your xBloom phone-app account** over
 the unofficial cloud REST API (`xbloom cloud`, see below), so a recipe you keep
@@ -26,26 +32,34 @@ documented protocol so others can build on it.
 > 🤖 **Designed with agentic use in mind.** This was written *by* an AI coding agent
 > ([Claude Code](https://claude.com/claude-code)) and tailored to be driven *by* one —
 > scriptable commands, predictable/parseable output, a fully documented protocol, and a
-> safety model where the tool only ever **loads** a recipe and a **human approves the brew
-> on the machine**. (It's just as pleasant to use by hand.)
+> safety model where **loading** a recipe only arms the machine and **starting** the brew
+> is a separate, explicit step. (It's just as pleasant to use by hand.)
 
 ---
 
-## ⚠️ Safety — this tool only *loads*, it never auto-starts
+## ⚠️ Safety — loading and starting are separate, deliberate steps
 
-This is the headline design decision and a hard invariant:
+`xbloom-ble` can both **load** a recipe and **start** the brew (just like the
+official app). The design keeps those two apart so nothing brews by accident:
 
-> **`xbloom-ble` only ever LOADS a recipe onto the machine. It sends the load
-> sequence, the machine then prompts you, and YOU physically approve the brew on
-> the machine itself. The tool will never start a brew for you.**
+> **Loading a recipe only *arms* the machine — it can never start a brew.
+> Starting is a separate, explicit call that you make on purpose, and it
+> physically dispenses near-boiling water.**
 
-The xBloom BLE protocol *does* have opcodes that force-start a brew (`0x42`
-commit and `0x46` start). **This package never builds or sends them.** There is
-intentionally no code path that emits `0x42`/`0x46` — `build_load_frames()`
-returns only the four LOAD frames, and there is even a belt-and-braces assertion
-that rejects a forbidden opcode if one ever crept in. So the worst this tool can
-do is arm a recipe you then have to confirm by hand, with the cup and beans in
-front of you.
+Concretely:
+
+- `load_recipe()` / `xbloom brew` (no `--start`) send only the four LOAD frames
+  (`build_load_frames()` never contains a start opcode, with a belt-and-braces
+  assertion to prove it). The machine arms and prompts; you can approve it on the
+  machine by hand.
+- `start()` / `xbloom brew --start` / the TUI's confirm-gated **Start** additionally
+  send commit (`0x42`) + start (`0x46`) to launch the brew, and `cancel_brew()`
+  (`0x47`) aborts one. Starting is **never** a side effect of loading — you always
+  ask for it explicitly.
+
+> 🔥 Only start a brew when the machine is physically ready (water tank filled,
+> dripper/cup in place). A remote start pours hot water with no one required at the
+> machine.
 
 ---
 
@@ -104,7 +118,8 @@ Then, whichever path you choose:
 >
 > **▸ Path 1 — Load one recipe and brew it now** (`xbloom brew <recipe>`).
 > The tool loads the recipe and the machine prompts you to **approve the brew on
-> the machine**. Best for a one-off brew of whatever you're dialing in.
+> the machine** — or add `--start` to launch it remotely (⚠️ dispenses hot water).
+> Best for a one-off brew of whatever you're dialing in.
 >
 > **▸ Path 2 — Program the three dial presets, then brew with no phone**
 > (`xbloom save-slots <A> <B> <C>`). Stores three recipes on the machine's
@@ -158,15 +173,28 @@ export XBLOOM_ADDRESS=AA:BB:CC:DD:EE:FF
 xbloom brew recipes/example-washed.yaml
 ```
 
-It validates, connects, **loads** the recipe, then prints:
+It validates, connects, **loads** the recipe (does **not** start it), then prints:
 
 ```
-✋ Recipe loaded. Add beans + cup, then APPROVE ON THE MACHINE to start. (This tool will NOT start it.)
+✋ Recipe loaded. Add beans + cup, then APPROVE ON THE MACHINE to start.
 ```
 
 …and streams live status (machine state changes) until the brew completes or the
 timeout (`--timeout`, default 300 s) elapses. A telemetry log is written to
 `./telemetry-<timestamp>.json`.
+
+### Start the brew remotely (`--start`)
+
+To also **launch** the brew from your computer — like tapping *Brew* in the app —
+add `--start`. This sends commit + start after loading:
+
+```bash
+xbloom brew recipes/example-washed.yaml --start
+```
+
+> 🔥 `--start` dispenses hot water. Only use it with the machine physically ready
+> (water in, cup/dripper in place). Without `--start`, `brew` just loads and you
+> approve on the machine.
 
 The recipe argument to `brew` / `validate` / `cloud` can also be an **`http(s)://`
 URL** — so a recipe can be served and brewed without downloading it first:
@@ -176,6 +204,30 @@ xbloom brew https://xbloom.lodywgumce.tv/r/teso-la-leona.yaml
 ```
 
 Common flags: `--address`, `--timeout`, `-v/--verbose`, `--version`.
+
+### Terminal UI
+
+`xbloom` with no subcommand (or `xbloom tui`) launches a **keyboard-first terminal
+UI** — a k9s-style cockpit over a directory of recipe files:
+
+```bash
+xbloom tui --recipes ./recipes            # or just: xbloom
+```
+
+- **Recipes** tab — a table of your recipe files with a detail sidebar (dose,
+  ratio, grind, water, per-pour schedule, notes) that follows the cursor. Create
+  and edit recipes in a validated form (`n` / `e`), assign the dial slots
+  (`1`/`2`/`3`) and push them (`p`).
+- **Brewing** tab — press **brew** (`b` / Enter) to load a recipe; a **confirm
+  gate** appears (arrow to *Start*, Enter, or `y`) before anything launches, then a
+  live water/coffee graph streams. `c` cancels.
+- **History** tab — past brews with their saved telemetry curve.
+
+Run it against the simulator (no machine) with `--demo` to explore it safely.
+
+| Recipes + detail sidebar | Live brew graph | Brew history + telemetry |
+|---|---|---|
+| ![Recipes tab](docs/img/tui-recipes.png) | ![Brewing tab](docs/img/tui-brewing.png) | ![History tab](docs/img/tui-history.png) |
 
 ### Program the dial presets (save-slots)
 
@@ -271,6 +323,28 @@ The app also exposes two **special, non-numeric temperature settings — `RT`
 
 See **[Recipe limits & valid ranges](#recipe-limits--valid-ranges)** below for the
 full table and the firm bounds enforced.
+
+### Optional brew-level metadata
+
+A recipe may also carry optional **metadata** fields. These are *informational
+context* for a UI, recipe site, or your own notes — they round-trip through YAML
+but are **never sent to the machine** and are **not** range-checked against
+hardware limits:
+
+```yaml
+kind: custom          # recipe kind / preset base (custom, medium-auto, …)
+dripper: Omni         # the dripper/brewer used
+water_ml: 240         # total brew water (may exceed Σ pours for bypass/iced brews)
+hot_water_ml: 150     # iced: hot water poured over ice
+ice_g: 85             # iced: ice weight
+time: "~2:00"         # expected brew time, display string
+note: strawberry-forward; ground finer as it aged
+pours:
+  - {label: Bloom, ml: 45, temp_c: 93, pattern: spiral, agitation: true, pause_s: 40, rpm: 100}
+```
+
+Each pour may also carry a `label` (e.g. `Bloom`, `Pour 1`). All of these are
+optional; omit them and the recipe behaves exactly as before.
 
 Validation rejects: fewer than two pours (you need at least a bloom and a first
 pour), an unknown `pattern`/`agitation` combo, out-of-range values, and — if a
@@ -390,9 +464,18 @@ command, e.g. `580207a6…`):
 5. **`0x41`** (grind) or **`0x44`** (grinder off / no-grind) — pours frame (see byte
    map below).
 
-After the pours frame the machine reports STATE `0x1f` (armed) and **waits for the
-human to approve on the machine**. The protocol's `0x42` (commit) and `0x46` (start)
-opcodes would force-start the brew — **this package never sends them.**
+After the pours frame the machine reports STATE `0x1f` (armed). At that point you can
+approve on the machine by hand, **or** start the brew remotely with three further
+single-byte frames (each payload `01`, byte-exact from the app's capture):
+
+6. **`0x42`** (seq `0x1f`) — **commit**: arm → `0x1e` (awaiting-confirm), ~99 s countdown.
+7. **`0x46`** (seq `0x9e`) — **start**: begins brewing (`0x3b`).
+8. **`0x47`** (seq `0x9e`) — **cancel**: aborts a committed/running brew.
+
+`build_load_frames()` never includes the commit/start opcodes — loading only arms the
+machine. Starting/cancelling is done through the dedicated `build_commit()` /
+`build_start()` / `build_cancel()` builders, emitted only by an explicit
+`start()` / `cancel_brew()` call.
 
 ### The pours frame payload (`0x41` / `0x44`)
 
@@ -526,8 +609,10 @@ async def main():
     recipe = Recipe.from_yaml("recipes/example-washed.yaml")
     devices = await scan()
     async with XBloomClient(devices[0].address) as client:
-        await client.load_recipe(recipe)      # loads only — never starts
-        # → now physically approve the brew on the machine
+        await client.load_recipe(recipe)      # loads + arms only — never brews
+        # then EITHER approve on the machine by hand, OR start it remotely:
+        await client.start()                  # commit + start — ⚠️ dispenses hot water
+        # (client.brew(recipe) = load_recipe + start; client.cancel_brew() aborts)
         await client.stream_telemetry(lambda ev: print(ev), duration=300)
 
 asyncio.run(main())
@@ -575,10 +660,11 @@ their respective owner.
 
 The protocol here was reverse-engineered and may be incomplete or wrong; it may
 break with firmware updates. **Use at your own risk — you assume full
-responsibility** for anything you do with your machine. By design this tool only
-*loads* recipes and **never auto-starts a brew**: the machine always prompts you
-and you approve the brew physically on the device. Even so, supervise your
-machine. No warranty (see [LICENSE](LICENSE)).
+responsibility** for anything you do with your machine. By design, *loading* a
+recipe only arms the machine and never brews on its own; **starting** a brew is a
+separate, explicit action (`--start` / `start()`) that dispenses hot water — only
+do it with the machine physically ready, and supervise it. No warranty (see
+[LICENSE](LICENSE)).
 
 ## License
 

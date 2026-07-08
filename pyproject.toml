@@ -28,7 +28,9 @@ dependencies = [
 # The optional cloud feature (push recipes to your xBloom app account) needs an
 # RSA implementation. BLE control works without it.
 cloud = ["cryptography>=41"]
-dev = ["pytest>=7", "ruff>=0.1", "cryptography>=41"]
+# The interactive terminal UI (`xbloom` with no args, or `xbloom tui`).
+tui = ["textual>=1", "textual-plotext>=1"]
+dev = ["pytest>=7", "pytest-cov>=4", "ruff>=0.1", "vulture>=2", "cryptography>=41", "textual>=1", "textual-plotext>=1"]
 
 [project.urls]
 Homepage = "https://github.com/Janczykkkko/xbloom-ble"
@@ -43,6 +45,26 @@ include = ["xbloom_ble*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.vulture]
+# Dead-code detection. min_confidence 80 skips the Textual framework's
+# reflection-driven members (compose/on_mount/BINDINGS/action_* etc.), which read as
+# "unused" at lower confidence but are called by the framework.
+paths = ["xbloom_ble"]
+min_confidence = 80
+
+[tool.coverage.run]
+source = ["xbloom_ble"]
+
+[tool.coverage.report]
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@(abc\\.)?abstractmethod",
+    "\\.\\.\\.",              # abstract-method / protocol stubs
+]
 
 [tool.ruff]
 line-length = 100

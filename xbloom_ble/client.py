@@ -3,10 +3,16 @@
 This is the only module that touches hardware. It discovers the machine,
 connects, writes the LOAD frames, and streams status telemetry.
 
-⚠️ Safety: :meth:`XBloomClient.load_recipe` only ever *loads* a recipe. It
-writes the four LOAD frames (``a4, a6, a8, 41``) and returns once the machine
-reports STATE ``0x1f`` (armed). It then waits for the human to approve the brew
-on the machine. There is no method that sends ``0x42``/``0x46``.
+Safety model: loading and starting are **separate, explicit** operations.
+:meth:`XBloomClient.load_recipe` only *loads* (writes ``a4, a6, a8, 41`` and
+returns once the machine is armed at STATE ``0x1f``) — it never starts a brew, so
+a load can never brew by accident. :meth:`XBloomClient.start` is the deliberate
+"go": it sends commit (``0x42``) + start (``0x46``) to launch the brew remotely,
+exactly like the app's Brew button. :meth:`XBloomClient.brew` is the convenience
+that loads then starts. :meth:`XBloomClient.cancel_brew` aborts (``0x47``).
+
+⚠️ Starting a brew physically dispenses near-boiling water — only call
+:meth:`start`/:meth:`brew` when the machine is ready and someone intends to brew.
 """
 
 from __future__ import annotations
@@ -16,10 +22,13 @@ import logging
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 
 from .protocol import (
+    build_cancel,
+    build_commit,
     build_load_frames,
     build_save_slot,
     build_session_start,
     build_set_mode,
+    build_start,
     build_status_query,
 )
 from .recipe import Recipe
@@ -36,6 +45,14 @@ NAME_PREFIX = "XBLOOM"
 
 # State byte that means "recipe loaded / armed".
 STATE_ARMED = 0x1F
+# Brew lifecycle states: 0x22 starting/grinding, 0x3b brewing. On some machines commit
+# auto-proceeds through these; on others the machine waits in awaiting-confirm (0x1e)
+# and needs the 0x46 start frame.
+STATE_STARTING = 0x22
+STATE_BREWING = 0x3B
+# Machine-refused states (it checks water/beans right after commit, before pouring).
+STATE_NO_WATER = 0x0C
+STATE_NO_BEANS = 0x0F
 # Slot-save status states (see telemetry): 0x43 saving, 0x25 saved, 0x01 idle.
 STATE_IDLE = 0x01
 STATE_SLOTS_SAVED = 0x25
@@ -43,14 +60,6 @@ STATE_SLOTS_SAVED = 0x25
 
 class XBloomError(RuntimeError):
     """Raised on BLE / protocol errors in the client."""
-
-
-def _short_uuid(uuid: str) -> str:
-    """Return the 16-bit short form of a Bluetooth-base UUID, else the input."""
-    u = uuid.lower()
-    if u.endswith("-0000-1000-8000-00805f9b34fb") and u.startswith("0000"):
-        return u[4:8]
-    return u
 
 
 async def scan(timeout: float = 8.0):
@@ -119,7 +128,11 @@ class XBloomClient:
     # Notifications
     # ------------------------------------------------------------------
     def _on_notify(self, _sender, data: bytearray) -> None:
-        event = parse_notification(bytes(data))
+        raw = bytes(data)
+        event = parse_notification(raw)
+        # Full raw chatter at DEBUG (enable with `--debug`) — this is how we capture
+        # the brew-record frames we don't parse yet, so they can be decoded later.
+        log.debug("← %s%s", raw.hex(), f"  [{event.state_name}]" if event is not None else "")
         if event is not None:
             self._notif_queue.put_nowait(event)
 
@@ -209,6 +222,93 @@ class XBloomClient:
             return armed
         finally:
             await self._stop_notify()
+
+    # ------------------------------------------------------------------
+    # Starting / cancelling a brew  (explicit — dispenses hot water)
+    # ------------------------------------------------------------------
+    async def _drain_for_any(self, states: set[int], timeout: float) -> StatusEvent | None:
+        """Return the first status event whose state is in ``states``, or ``None`` on
+        timeout. Skips heartbeats; consumes intervening frames."""
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + timeout
+        while True:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return None
+            try:
+                event = await asyncio.wait_for(self._notif_queue.get(), timeout=remaining)
+            except asyncio.TimeoutError:
+                return None
+            if event.is_heartbeat:
+                continue
+            log.debug("status: %s", event.state_name)
+            if event.state in states:
+                return event
+
+    async def start(self, *, settle: float = 8.0) -> StatusEvent:
+        """Start the currently-armed brew (call :meth:`load_recipe` first).
+
+        Sends commit (``0x42``) and then **adapts to the machine**: after commit some
+        machines auto-proceed straight through awaiting-confirm → grinding → brewing,
+        while others sit in awaiting-confirm waiting for a start press. So we *watch*
+        for up to ``settle`` seconds:
+
+        * If the machine reaches **grinding (0x22)** or **brewing (0x3b)** on its own,
+          the brew is underway — we do **not** send ``0x46`` (sending it into a running
+          brew aborts it back to armed — verified on hardware).
+        * Only if it **stalls in awaiting-confirm** do we send the ``0x46`` start frame
+          to nudge it (this is what the vendor app's capture needed).
+
+        Returns best-effort once brewing/grinding is seen; never raises just because a
+        state wasn't observed (the caller streams telemetry for the live state).
+
+        ⚠️ This physically dispenses near-boiling water. Only call it when the machine
+        is ready (water/beans/cup in) and someone intends to brew.
+        """
+        if self._client is None or not self._client.is_connected:
+            raise XBloomError("not connected")
+
+        await self._start_notify()
+        try:
+            log.info("→ 0x42 commit (start the brew)")
+            await self._client.write_gatt_char(CHAR_COMMAND, build_commit(), response=False)
+            # After commit the machine either acts (auto-proceeds to grinding/brewing, or
+            # refuses with no-water/no-beans), or just sits in awaiting-confirm. In ANY
+            # "acted" case we must NOT send 0x46 — sending it into a running brew aborts
+            # it, and it's pointless on a refusal. Only nudge with 0x46 if it stalls.
+            acted = {STATE_STARTING, STATE_BREWING, STATE_NO_WATER, STATE_NO_BEANS}
+            ev = await self._drain_for_any(acted, settle)
+            if ev is not None:
+                log.info("machine acted on commit (%s) — not sending 0x46", ev.state_name)
+                return ev
+            # It stalled in awaiting-confirm — nudge it with the start frame.
+            log.info("machine waiting in confirm — → 0x46 start")
+            await self._client.write_gatt_char(CHAR_COMMAND, build_start(), response=False)
+            ev = await self._drain_for_any(acted, 5.0)
+            if ev is not None:
+                log.info("brew started (%s)", ev.state_name)
+                return ev
+            log.info("start sent — streaming telemetry for live state")
+            return StatusEvent(state=STATE_BREWING, state_name="brewing", raw=b"")
+        finally:
+            await self._stop_notify()
+
+    async def brew(self, recipe: Recipe, *, settle: float = 2.0) -> StatusEvent:
+        """Load ``recipe`` and immediately start brewing (load + :meth:`start`).
+
+        Convenience for the app-style "tap and brew" flow: it stages the recipe
+        (arming the machine) and then sends commit + start. ⚠️ Same hot-water
+        caveat as :meth:`start` — it brews for real.
+        """
+        await self.load_recipe(recipe, settle=settle)
+        return await self.start()
+
+    async def cancel_brew(self) -> None:
+        """Abort a committed/running brew (``0x47`` cancel), returning toward idle."""
+        if self._client is None or not self._client.is_connected:
+            raise XBloomError("not connected")
+        log.info("→ 0x47 cancel (aborting brew)")
+        await self._client.write_gatt_char(CHAR_COMMAND, build_cancel(), response=False)
 
     async def save_slots(
         self,
@@ -324,51 +424,50 @@ class XBloomClient:
             raise XBloomError(f"scale sequence must have 3 entries; got {len(vals)}")
         return vals
 
-    async def _await_ack(self, cmd: int) -> None:
-        """Wait for the ACK frame echoing ``cmd`` (best-effort, tolerant)."""
-        loop = asyncio.get_event_loop()
-        deadline = loop.time() + self.ack_timeout
-        while True:
-            remaining = deadline - loop.time()
-            if remaining <= 0:
-                log.warning("no explicit ACK for cmd 0x%02x; continuing", cmd)
-                return
-            try:
-                event = await asyncio.wait_for(self._notif_queue.get(), timeout=remaining)
-            except asyncio.TimeoutError:
-                log.warning("no explicit ACK for cmd 0x%02x; continuing", cmd)
-                return
-            if event.is_heartbeat:
-                continue
-            # An ACK echoes the command byte at offset 3.
-            if len(event.raw) > 3 and event.raw[3] == cmd:
-                log.debug("← ACK 0x%02x", cmd)
-                return
-            # A status frame arriving early (e.g. armed) also counts as progress;
-            # put it back so the caller's state wait can see it.
-            self._notif_queue.put_nowait(event)
-            return
-
     # ------------------------------------------------------------------
     # Telemetry streaming
     # ------------------------------------------------------------------
+    def _on_aux_notify(self, _sender, data: bytearray) -> None:
+        """Log-only handler for the ``ffe3`` aux characteristic (capture/diagnostic).
+
+        The live scale weights the app shows are NOT on ``ffe2`` (that carries only
+        state + a pour counter). They may stream on ``ffe3`` — this taps it purely to
+        capture the raw bytes at DEBUG so the format can be decoded. It never feeds the
+        telemetry event stream and never affects the brew.
+        """
+        log.debug("←aux %s", bytes(data).hex())
+
     async def stream_telemetry(
         self,
         on_event: Callable[[StatusEvent], Awaitable[None] | None],
         duration: float = 300.0,
         *,
         stop_on_terminal: bool = True,
+        capture_aux: bool = False,
     ) -> None:
         """Subscribe to ``ffe2`` and invoke ``on_event`` for each status event.
 
         Runs for up to ``duration`` seconds. If ``stop_on_terminal`` is set,
         returns early once a terminal state (complete / idle) is seen.
         ``on_event`` may be a plain or async callable.
+
+        If ``capture_aux`` is set, ALSO subscribe to the ``ffe3`` aux characteristic
+        and log its raw frames at DEBUG (diagnostic only — used with ``--debug`` to
+        hunt for the live-scale weight stream). This is best-effort: if ``ffe3`` can't
+        be subscribed it's logged and ignored, never breaking the brew.
         """
         if self._client is None or not self._client.is_connected:
             raise XBloomError("not connected")
 
         await self._start_notify()
+        aux_on = False
+        if capture_aux:
+            try:
+                await self._client.start_notify(CHAR_AUX, self._on_aux_notify)
+                aux_on = True
+                log.debug("aux capture on (ffe3) — hunting for the live-weight stream")
+            except Exception as exc:  # noqa: BLE001 - diagnostic tap, never fatal
+                log.debug("aux capture unavailable: %s", exc)
         loop = asyncio.get_event_loop()
         deadline = loop.time() + duration
         try:
@@ -391,4 +490,9 @@ class XBloomClient:
                     log.info("terminal state '%s' reached", event.state_name)
                     return
         finally:
+            if aux_on:
+                try:
+                    await self._client.stop_notify(CHAR_AUX)
+                except Exception:  # pragma: no cover - best-effort cleanup
+                    pass
             await self._stop_notify()

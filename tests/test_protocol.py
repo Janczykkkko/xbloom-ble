@@ -2,8 +2,8 @@
 
 These import the *reference* implementation (``parse_btsnoop.py``) and assert
 that this package's :func:`build_load_frames` reproduces the reference's first
-four frames exactly, for a range of recipes — and that no frame ever carries a
-brew-start opcode.
+four frames exactly, for a range of recipes — and that the LOAD frames never
+carry a brew-start opcode (starting a brew is a separate, explicit call).
 
 Set the ``XBLOOM_REFERENCE`` environment variable to the path of the
 ``parse_btsnoop.py`` reference script to enable these comparisons; by default it
@@ -19,11 +19,15 @@ from pathlib import Path
 import pytest
 
 from xbloom_ble.protocol import (
-    FORBIDDEN_COMMIT_OPCODE,
-    FORBIDDEN_START_OPCODE,
+    CANCEL_OPCODE,
+    COMMIT_OPCODE,
     NO_GRIND_WIRE,
+    START_OPCODE,
     build_41,
+    build_cancel,
+    build_commit,
     build_load_frames,
+    build_start,
     crc16_kermit,
     xbloom_frame,
 )
@@ -106,11 +110,22 @@ def test_load_frames_match_reference(name):
 
 
 @pytest.mark.parametrize("name", list(RECIPES))
-def test_no_forbidden_opcodes(name):
-    """No LOAD frame may carry the commit (0x42) or start (0x46) opcode."""
+def test_load_frames_are_load_only(name):
+    """LOAD frames never carry a brew-start/cancel opcode — loading can't brew.
+
+    Starting a brew is a separate, explicit step (build_commit/build_start), so a
+    load sequence must never contain 0x42/0x46/0x47.
+    """
     for frame in build_load_frames(RECIPES[name]):
         cmd = frame[3]
-        assert cmd not in (FORBIDDEN_COMMIT_OPCODE, FORBIDDEN_START_OPCODE)
+        assert cmd not in (COMMIT_OPCODE, START_OPCODE, CANCEL_OPCODE)
+
+
+def test_commit_start_cancel_frames_match_capture():
+    """The commit/start/cancel frames are byte-exact vs the vendor app's capture."""
+    assert build_commit().hex() == "580101421f0c000000017fcf"   # 0x42, seq 0x1f
+    assert build_start().hex() == "580101469e0c0000000180a1"    # 0x46, seq 0x9e
+    assert build_cancel().hex() == "580101479e0c00000001553e"   # 0x47, seq 0x9e
 
 
 def test_load_frames_opcode_order():

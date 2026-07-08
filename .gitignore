@@ -27,3 +27,6 @@ telemetry-*.json
 .vscode/
 *.swp
 .DS_Store
+
+# BLE debug capture logs (contain MAC/serial)
+xbloom-debug-*.log
