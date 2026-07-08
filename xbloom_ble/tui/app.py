@@ -811,6 +811,12 @@ class XBloomApp(App):
                 if ev.state_name in ("no_beans", "no_water"):
                     await self._abort_supply(ev.state_name, head)
                     break
+                if ev.state_name == "ack_0x41" and saw_progress:
+                    # The machine's "coffee ready" beep is the 0x41 done-echo. On this
+                    # firmware it only returns to idle (below) a beat later — often only
+                    # once the cup is lifted — so treat the beep itself as completion.
+                    completed = True
+                    break
                 if ev.state_name in ("complete", "cancelled"):
                     completed = ev.state_name == "complete"
                     break
