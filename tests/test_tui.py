@@ -975,3 +975,77 @@ def test_journey_history_row_highlight_updates_detail(store, tmp_path):
     top, second = drive(store, s, history=hist)
     assert "Brew Newer" in top             # newest-first, detail on row 0
     assert "Brew Older" in second          # ...and the detail follows the cursor
+
+
+# ── persistent connection (held link for fast brews) ─────────────────
+async def _wait_conn(app, pilot, want: bool, timeout=6.0):
+    """Wait until the controller's is_connected matches ``want`` (workers are async)."""
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < timeout:
+        await pilot.pause(0.02)
+        if app.controller.is_connected is want:
+            return
+    raise AssertionError(f"connection did not become {want} in time")
+
+
+def test_journey_auto_connects_on_mount(store):
+    """auto_connect (the default) opens and holds the BLE link right after launch."""
+    async def s(app, pilot):
+        await _wait_conn(app, pilot, True)
+        assert app.controller.is_connected
+    drive(store, s)
+
+
+def test_no_auto_connect_stays_disconnected(store):
+    """auto_connect=False → the app launches idle, no link opened."""
+    async def run():
+        app = XBloomApp(store, FakeController(speed=0.002, auto_start=0.03), auto_connect=False)
+        async with app.run_test(size=(120, 34)) as pilot:
+            await pilot.pause(0.15)
+            assert not app.controller.is_connected
+    asyncio.run(run())
+
+
+def test_journey_connect_toggle(store):
+    """<o> toggles the link: connected → disconnected → connected."""
+    async def s(app, pilot):
+        await _wait_conn(app, pilot, True)     # auto-connected on mount
+        await pilot.press("o")                 # → disconnect
+        await _wait_conn(app, pilot, False)
+        await pilot.press("o")                 # → reconnect
+        await _wait_conn(app, pilot, True)
+    drive(store, s)
+
+
+def test_journey_brew_keeps_connection_open(store):
+    """A brew reuses the held link and leaves it OPEN afterwards (no per-brew teardown)."""
+    async def s(app, pilot):
+        await _wait_conn(app, pilot, True)
+        await start_brew(app, pilot)
+        await await_brew(app, pilot)
+        assert app.controller.is_connected     # still held after the brew completes
+    drive(store, s)
+
+
+def test_journey_brew_reconnects_after_drop(store):
+    """If the held link dropped between brews, _ensure_connected heals it transparently."""
+    async def s(app, pilot):
+        await _wait_conn(app, pilot, True)
+        app.controller._connected = False      # simulate an out-of-range / slept drop
+        assert not app.controller.is_connected
+        await start_brew(app, pilot)
+        await await_brew(app, pilot)
+        assert app.controller.is_connected     # reconnected itself for the brew
+    drive(store, s)
+
+
+def test_connect_toggle_refused_mid_brew(store):
+    """You can't disconnect while a brew is running (would kill the pour)."""
+    async def s(app, pilot):
+        await _wait_conn(app, pilot, True)
+        app._brewing = True                    # pretend a brew is in flight
+        app.action_connect()                   # should be refused, link untouched
+        await pilot.pause(0.05)
+        assert app.controller.is_connected
+        assert "mid-brew" in app._last_message
+    drive(store, s)

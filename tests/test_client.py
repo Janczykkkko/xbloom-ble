@@ -277,3 +277,57 @@ def test_stream_telemetry_honours_duration():
     c = _client(fake)
     # nothing is ever pushed -> returns when the (tiny) duration elapses, no hang
     run(c.stream_telemetry(lambda e: None, duration=0.05))
+
+
+# ── held session (open_session): the on-connect handshake that shows "connected" ──
+def test_open_session_subscribes_and_sends_a4():
+    """open_session mirrors the phone app: subscribe to ffe2 + send the a4 frame."""
+    fake = FakeBleak()
+    c = _client(fake)
+    run(c.open_session())
+    assert fake._cb is not None                 # subscribed to ffe2
+    assert _cmds(fake) == [0xA4]                 # exactly the session-start frame
+    assert c._session_active and c._subscribed
+
+
+def test_idle_session_drops_notifications():
+    """While a session is held but no op is consuming, the machine's idle stream is
+    dropped so the queue can't grow unbounded."""
+    fake = FakeBleak()
+    c = _client(fake)
+    run(c.open_session())
+    for _ in range(50):                          # simulate the machine's idle chatter
+        fake._push(IDLE)
+        fake._push(WATER35)
+    assert c._notif_queue.empty()                # nothing queued while idle
+
+
+def test_session_held_across_a_load():
+    """A load reuses the held subscription and leaves it up afterwards (no teardown),
+    and post-load idle frames are still dropped."""
+    fake = FakeBleak()
+    c = _client(fake)
+    run(c.open_session())
+    armed = run(c.load_recipe(RECIPE, settle=0))
+    assert armed.state == 0x1F                   # armed via the queued ARMED frame
+    assert c._subscribed and c._session_active   # subscription held past the op
+    fake._push(IDLE)
+    assert c._notif_queue.empty()                # back to idle → dropped again
+
+
+def test_start_notify_drains_stale_backlog():
+    """Starting consumption clears any stale queued events first."""
+    from xbloom_ble.telemetry import StatusEvent
+    fake = FakeBleak()
+    c = _client(fake)
+    c._notif_queue.put_nowait(StatusEvent(state=0x99, state_name="stale", raw=b""))
+    run(c._start_notify())
+    assert c._notif_queue.empty() and c._consuming is True
+
+
+def test_disconnect_resets_session():
+    fake = FakeBleak()
+    c = _client(fake)
+    run(c.open_session())
+    run(c.disconnect())
+    assert not c._session_active and not c._subscribed and not c._consuming

@@ -251,6 +251,7 @@ class XBloomApp(App):
         Binding("i", "import", "import", show=False),
         Binding("b", "brew", "brew"),
         Binding("c", "cancel", "cancel"),
+        Binding("o", "connect", "connect"),
         Binding("e", "edit", "edit"),
         Binding("n", "new", "new"),
         Binding("C", "clone", "clone", show=False),
@@ -275,11 +276,14 @@ class XBloomApp(App):
         self, store: RecipeStore, controller: MachineController, *,
         auto_brew: bool = False, history: HistoryStore | None = None,
         slots: SlotStore | None = None, debug: bool = False,
+        auto_connect: bool = True,
     ) -> None:
         super().__init__()
         self.store = store
         self.controller = controller
         self.auto_brew = auto_brew
+        self.auto_connect = auto_connect
+        self._connecting = False   # True while a (re)connect is in flight — for the chrome
         self._debug = debug
         self.history = history or HistoryStore(store.dir.parent / "xbloom-history.json")
         self.slots = slots or SlotStore(store.dir.parent / "xbloom-slots.json")
@@ -319,6 +323,11 @@ class XBloomApp(App):
         self._log(f"loaded {len(self._entries)} recipes from {self.store.dir}", "green")
         self._sync_chrome()
         self.query_one(RecipesView).focus()
+        if self.auto_connect and not self.controller.is_connected:
+            # Connect once in the background and hold the link for the session, so brews
+            # skip the per-brew BLE connect + handshake. Non-blocking; state shows in the
+            # header + activity log. Toggle off any time with <o> (or `auto_connect: off`).
+            self.run_worker(self._connect_worker(), name="connect", exclusive=False)
         if self.auto_brew:
             self.set_timer(0.4, self.action_brew)
 
@@ -353,6 +362,15 @@ class XBloomApp(App):
         if saved:
             lg = logging.getLogger("xbloom_ble")
             lg.handlers, lg.level, lg.propagate = saved
+
+    async def action_quit(self) -> None:
+        """Quit — drop the held BLE link first so the machine is freed immediately
+        (e.g. for the phone app), then exit. A disconnect hiccup never blocks quit."""
+        try:
+            await self.controller.disconnect()
+        except Exception:  # noqa: BLE001
+            pass
+        self.exit()
 
     # ── helpers ────────────────────────────────────────────────────
     @property
@@ -433,7 +451,12 @@ class XBloomApp(App):
             pass
 
     def _render_chrome(self) -> None:
-        conn = "● connected" if getattr(self.controller, "address", None) else "○ idle"
+        if self._connecting:
+            conn = "◌ connecting…"
+        elif self.controller.is_connected:
+            conn = "● connected"
+        else:
+            conn = "○ disconnected"
         brew = "brewing…" if self._brewing else "idle"
         self.query_one(Header).set_context({
             "Machine": conn,
@@ -441,19 +464,21 @@ class XBloomApp(App):
             "Brew": brew,
             "Tab": self._view,
         })
+        # <o> toggles the held connection — label it by the current link state.
+        conn_key = ("o", "disconnect" if self.controller.is_connected else "connect")
         keys = {
             "recipes": [
                 ("enter", "brew ▶"), ("e", "edit"), ("n", "new"), ("C", "clone"),
                 ("1/2/3", "→ slot"),
                 ("p", "push slots"), ("/", "filter"), ("i", "import"), ("d", "delete"),
-                ("tab", "next tab"), ("h", "help"), ("q", "quit"),
+                conn_key, ("tab", "next tab"), ("h", "help"), ("q", "quit"),
             ],
             "brewing": [
-                ("c", "cancel"), ("esc", "recipes"), ("tab", "next tab"),
+                ("c", "cancel"), conn_key, ("esc", "recipes"), ("tab", "next tab"),
                 ("l", "log"), ("h", "help"), ("q", "quit"),
             ],
             "history": [
-                ("j/k", "select"), ("esc", "recipes"), ("tab", "next tab"),
+                ("j/k", "select"), conn_key, ("esc", "recipes"), ("tab", "next tab"),
                 ("l", "log"), ("h", "help"), ("q", "quit"),
             ],
         }.get(self._view, [])
@@ -659,19 +684,14 @@ class XBloomApp(App):
     async def _push_slots(self, recipes) -> None:
         self._log("pushing slots A/B/C → machine…", "cyan")
         try:
-            await self.controller.connect()
-            self._sync_chrome()
+            await self._ensure_connected()      # reuse the held link (connect if needed)
             await self.controller.save_slots(recipes)
             self._log("✓ slots A/B/C programmed", "green")
             self._notice("slots A/B/C programmed")
         except Exception as exc:  # noqa: BLE001
             self._log(f"slot push failed: {exc}", "red")
             self._notice(f"slot push failed: {exc}")
-        finally:
-            try:
-                await self.controller.disconnect()
-            except Exception:
-                pass
+        # Connection stays open (held for the session) — no teardown here.
 
     # ── navigation ─────────────────────────────────────────────────
     def action_cursor_down(self) -> None:
@@ -720,6 +740,56 @@ class XBloomApp(App):
             self._brew_status("[yellow]● cancelling… (waiting for the machine to stop)[/]")
             self.run_worker(self.controller.cancel(), name="cancel")
 
+    # ── connection (held open for the session) ─────────────────────
+    async def _ensure_connected(self) -> None:
+        """Connect if the link isn't already up, reusing a held connection.
+
+        This is what makes brews fast: with the connection held open across the
+        session, this is a no-op on every brew after the first. It also transparently
+        **reconnects** if the link dropped (out of range / machine slept) since the last
+        brew, so a stale session heals itself instead of erroring.
+        """
+        if self.controller.is_connected:
+            return
+        self._connecting = True
+        self._sync_chrome()
+        try:
+            await self.controller.connect()
+        finally:
+            self._connecting = False
+            self._sync_chrome()
+
+    async def _connect_worker(self) -> None:
+        """Background connect for auto-connect / the <o> toggle (never crashes the app)."""
+        try:
+            self._log("connecting to the machine…", "cyan")
+            await self._ensure_connected()
+            if self.controller.is_connected:
+                self._log("✓ connected — link held open for fast brews", "green")
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"connect failed: {exc}", "red")
+            self._notice(f"connect failed: {exc}")
+
+    def action_connect(self) -> None:
+        """Toggle the machine connection (connect ↔ disconnect)."""
+        if self._brewing:
+            self._notice("can't disconnect mid-brew")
+            return
+        if self.controller.is_connected:
+            self.run_worker(self._disconnect_worker(), name="disconnect")
+        else:
+            self.run_worker(self._connect_worker(), name="connect")
+
+    async def _disconnect_worker(self) -> None:
+        try:
+            await self.controller.disconnect()
+            self._log("disconnected — machine freed (e.g. for the phone app)", "yellow")
+            self._notice("disconnected")
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"disconnect failed: {exc}", "red")
+        finally:
+            self._sync_chrome()
+
     async def _abort_supply(self, state_name: str, head: str) -> None:
         """Machine refused for no beans/water — cancel it back to idle and message."""
         what = "beans" if state_name == "no_beans" else "water"
@@ -766,9 +836,11 @@ class XBloomApp(App):
         head = (f"[b]{r.name}[/]  {r.dose_g} g · 1:{r.effective_ratio:g} · "
                 f"{grind} · {r.total_water_ml} ml")
         try:
-            self._brew_status(f"{head}\n[dim]connecting…[/]")
-            self._log(f"brew {r.name} — connecting…")
-            await self.controller.connect()
+            # Reuse the held connection (connect only if not already up / it dropped).
+            if not self.controller.is_connected:
+                self._brew_status(f"{head}\n[dim]connecting…[/]")
+                self._log(f"brew {r.name} — connecting…")
+            await self._ensure_connected()
             self._brew_status(f"{head}\n[dim]staging…[/]")
             self._log(f"staging {r.name} ({grind}, 1:{r.effective_ratio:g})")
             await self.controller.stage(r)
@@ -918,8 +990,7 @@ class XBloomApp(App):
             self._log(f"error: {exc}", "red")
         finally:
             self._brewing = False
+            # Keep the BLE link OPEN for the next brew — it's torn down only on an
+            # explicit <o> disconnect or on quit. This is the whole point: no per-brew
+            # reconnect + handshake.
             self._sync_chrome()
-            try:
-                await self.controller.disconnect()
-            except Exception:
-                pass

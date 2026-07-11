@@ -33,13 +33,23 @@ class MachineController(ABC):
 
     address: str | None = None
 
+    @property
+    def is_connected(self) -> bool:
+        """Whether a BLE link is currently held open.
+
+        Concrete (not abstract) so existing controllers keep working; the real and
+        fake controllers override/populate it. Defaults to False for minimal
+        controllers that don't model a held connection.
+        """
+        return bool(getattr(self, "_connected", False))
+
     @abstractmethod
     async def scan(self) -> list[str]:
         """Return discovered machine addresses."""
 
     @abstractmethod
     async def connect(self, address: str | None = None) -> None:
-        """Connect (scanning if no address given)."""
+        """Connect (scanning if no address given). Idempotent — a no-op if already connected."""
 
     @abstractmethod
     async def stage(self, recipe: Recipe) -> StatusEvent:
@@ -85,6 +95,7 @@ class FakeController(MachineController):
         self.started = False
         self._start_event: asyncio.Event | None = None
         self.saved_slots: list[Recipe] | None = None
+        self._connected = False
 
     def _started_event(self) -> asyncio.Event:
         # Created lazily so it binds to the running loop (not import-time).
@@ -97,7 +108,10 @@ class FakeController(MachineController):
         return [self.address]
 
     async def connect(self, address: str | None = None) -> None:
+        if self._connected:
+            return
         await asyncio.sleep(0.1 * self.speed)
+        self._connected = True
 
     async def stage(self, recipe: Recipe) -> StatusEvent:
         recipe.validate()
@@ -127,7 +141,7 @@ class FakeController(MachineController):
         await asyncio.sleep(0.15 * self.speed)
 
     async def disconnect(self) -> None:
-        pass
+        self._connected = False
 
     async def telemetry(self, duration: float = 300.0) -> AsyncIterator[StatusEvent]:
         r = self._recipe
@@ -181,12 +195,20 @@ class RealController(MachineController):
         self._addr = address
         self._client = None
 
+    @property
+    def is_connected(self) -> bool:
+        return self._client is not None and self._client.is_connected
+
     async def scan(self) -> list[str]:
         from ..client import scan
         return [d.address for d in await scan()]
 
     async def connect(self, address: str | None = None) -> None:
         from ..client import XBloomClient, scan
+        # Idempotent: "ensure connected" from a held-connection caller is a no-op when
+        # the link is already up (don't scan or re-open a second client).
+        if self.is_connected:
+            return
         addr = address or self._addr
         if not addr:
             found = await scan()
@@ -196,6 +218,9 @@ class RealController(MachineController):
         self.address = addr
         self._client = XBloomClient(addr)
         await self._client.connect()
+        # Open an app-style session (subscribe + a4) so the machine shows "connected"
+        # and the link stays warm — mirrors what the phone app does on connect.
+        await self._client.open_session()
 
     async def stage(self, recipe: Recipe) -> StatusEvent:
         if self._client is None:

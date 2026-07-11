@@ -238,6 +238,19 @@ xbloom tui --recipes ./recipes            # or just: xbloom
   live water/coffee graph streams. `c` cancels.
 - **History** tab — past brews with their saved telemetry curve.
 
+**Held connection (faster brews).** By default the TUI **connects to the machine on
+launch and keeps the BLE link open** for the whole session, so each brew skips the
+per-brew connect + handshake and starts near-instantly. It opens an **app-style
+session** on connect (subscribe + the `a4` session-start frame, exactly what the phone
+app does), so the **machine shows its usual "connected" icon** and the link stays warm
+— idle status frames are dropped so nothing accumulates, and no keepalive is needed
+(the app doesn't send one either). The header shows the live link state (`● connected` /
+`○ disconnected` / `◌ connecting…`); toggle it any time with **`o`** (e.g. to hand the
+machine back to the phone app — only one BLE link at a time).
+Quitting drops the link. Turn the auto-connect default off with `xbloom tui
+--no-auto-connect`, or persistently in the config (`auto_connect: false`, set during
+`xbloom init` or by editing the config file — see `xbloom config show`).
+
 Run it against the simulator (no machine) with `--demo` to explore it safely.
 
 |  |  |
