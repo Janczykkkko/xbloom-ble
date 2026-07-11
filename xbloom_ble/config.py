@@ -18,7 +18,7 @@ import yaml
 
 from . import paths
 
-_KNOWN = ("address", "recipes_dir", "cloud_email", "scale_on")
+_KNOWN = ("address", "recipes_dir", "cloud_email", "scale_on", "auto_connect")
 
 
 @dataclass
@@ -27,6 +27,7 @@ class Config:
     recipes_dir: str = ""        # override for the recipe store (else paths.recipes_dir())
     cloud_email: str = ""        # remembered to pre-fill re-login prompts (NOT the password)
     scale_on: bool = True        # default: brew with the scale on
+    auto_connect: bool = True    # connect on TUI launch and hold the link open (faster brews)
     # forward-compat: any unrecognised keys are preserved on round-trip, never dropped.
     extra: dict[str, Any] = field(default_factory=dict)
 

@@ -424,9 +424,22 @@ def _cmd_init(args) -> int:
     paths.ensure_dir(rdir)
     print(f"2) Recipe store: {rdir}\n")
 
-    # 3) optional cloud login (skippable; never blocks BLE use)
+    # 3) auto-connect: hold the BLE link open while the TUI runs (faster brews)
+    if interactive:
+        d = "Y/n" if cfg.auto_connect else "y/N"
+        ans = input(
+            f"3) Auto-connect to the machine and keep the link open while the TUI is "
+            f"running (faster brews)? [{d}]: "
+        ).strip().lower()
+        if ans in ("y", "yes"):
+            cfg.auto_connect = True
+        elif ans in ("n", "no"):
+            cfg.auto_connect = False
+    print(f"   ✓ auto-connect: {'on' if cfg.auto_connect else 'off'}\n")
+
+    # 4) optional cloud login (skippable; never blocks BLE use)
     if not args.no_cloud and interactive:
-        prompt = "3) Link your xBloom app account for cloud recipe sync? [y/N]: "
+        prompt = "4) Link your xBloom app account for cloud recipe sync? [y/N]: "
         ans = input(prompt).strip().lower()
         if ans in ("y", "yes"):
             from .cloud import XBloomCloud
@@ -463,6 +476,7 @@ def _cmd_config(args) -> int:
     print(f"address     : {cfg.address or '(none — scans on launch)'}")
     print(f"cloud email : {cfg.cloud_email or '(not set)'}")
     print(f"scale on    : {cfg.scale_on}")
+    print(f"auto-connect: {cfg.auto_connect}")
     return 0
 
 
@@ -540,6 +554,8 @@ def build_parser() -> argparse.ArgumentParser:
                        help="run against a simulated machine (no hardware needed)")
     s_tui.add_argument("--auto-brew", action="store_true",
                        help="start a brew immediately (demos/tests)")
+    s_tui.add_argument("--no-auto-connect", action="store_true",
+                       help="don't connect on launch / hold the link (override the config default)")
     s_tui.add_argument("--debug", action="store_true",
                        help="also log the full BLE chatter to a file (xbloom-debug-*.log)")
 
@@ -695,12 +711,15 @@ def _cmd_tui(args) -> int:
     import os
 
     from .tui import run_tui
+    # --no-auto-connect overrides the config default; otherwise None → use the config.
+    auto_connect = False if getattr(args, "no_auto_connect", False) else None
     return run_tui(
         recipes_dir=getattr(args, "recipes", None),
         address=getattr(args, "address", None) or os.environ.get("XBLOOM_ADDRESS"),
         demo=getattr(args, "demo", False),
         auto_brew=getattr(args, "auto_brew", False),
         debug=getattr(args, "debug", False),
+        auto_connect=auto_connect,
     )
 
 

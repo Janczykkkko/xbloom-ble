@@ -101,9 +101,19 @@ class XBloomClient:
     # ------------------------------------------------------------------
     # Connection
     # ------------------------------------------------------------------
+    @property
+    def is_connected(self) -> bool:
+        """True while the underlying BLE link is up (for held-connection callers)."""
+        return self._client is not None and self._client.is_connected
+
     async def connect(self) -> None:
         from bleak import BleakClient
 
+        # Idempotent: a held-connection caller (e.g. the TUI) may call connect() to
+        # "ensure connected" — if the link is already up, this is a fast no-op rather
+        # than leaking a second BleakClient.
+        if self.is_connected:
+            return
         log.info("connecting to %s…", self.address)
         self._client = BleakClient(self.address)
         await self._client.connect()

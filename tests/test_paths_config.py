@@ -79,13 +79,16 @@ def test_tighten_if_loose(tmp_path):
 def test_config_roundtrip_and_defaults(tmp_path):
     path = tmp_path / "config.yaml"
     assert cfgmod.load(path) == cfgmod.Config()          # missing file → defaults
-    cfg = cfgmod.Config(address="AA:BB:CC:DD:EE:FF", cloud_email="a@b.co", scale_on=False)
+    assert cfgmod.Config().auto_connect is True           # default: connect + hold on launch
+    cfg = cfgmod.Config(address="AA:BB:CC:DD:EE:FF", cloud_email="a@b.co", scale_on=False,
+                        auto_connect=False)
     cfgmod.save(cfg, path)
     assert cfgmod.exists(path)
     back = cfgmod.load(path)
     assert back.address == "AA:BB:CC:DD:EE:FF"
     assert back.cloud_email == "a@b.co"
     assert back.scale_on is False
+    assert back.auto_connect is False                     # round-trips the flag
 
 
 def test_config_preserves_unknown_keys(tmp_path):

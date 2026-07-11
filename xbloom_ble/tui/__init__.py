@@ -13,6 +13,7 @@ def run_tui(
     demo: bool = False,
     auto_brew: bool = False,
     debug: bool = False,
+    auto_connect: bool | None = None,
 ) -> int:
     """Build the store + controller and run the app. Returns a process exit code.
 
@@ -42,19 +43,21 @@ def run_tui(
     from .slots import SlotStore
     from .store import RecipeStore
 
+    cfg = cfgmod.load()
     if recipes_dir:
         store = RecipeStore(recipes_dir)
         slots = SlotStore(store.dir.parent / "xbloom-slots.json")
         history = HistoryStore(store.dir.parent / "xbloom-history.json")
     else:
-        cfg = cfgmod.load()
         store = RecipeStore(cfg.resolved_recipes_dir)
         slots = SlotStore(paths.slots_file())
         history = HistoryStore(paths.history_file())
         address = address or cfg.address or None
     store.ensure()
 
+    # auto_connect: explicit arg (e.g. --no-auto-connect) wins, else the saved config default.
+    ac = cfg.auto_connect if auto_connect is None else auto_connect
     controller = FakeController(speed=0.2, auto_start=1.5) if demo else RealController(address)
     XBloomApp(store, controller, auto_brew=auto_brew, debug=debug,
-              history=history, slots=slots).run()
+              history=history, slots=slots, auto_connect=ac).run()
     return 0

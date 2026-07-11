@@ -34,6 +34,9 @@ The library is developed and tested on **Linux (BlueZ)**. `bleak` also supports 
 
 ## Persistence
 
+- [x] **Hold the BLE connection open** for the TUI session (connect on launch + reuse across
+      brews, transparent reconnect on drop, `o` connect/disconnect toggle, `auto_connect` config
+      default + `--no-auto-connect`) — brews skip the per-brew connect + handshake.
 - [x] Move recipes/history/slots/config/token to **stable per-user dirs** via `platformdirs`
       (config / data / state, `XBLOOM_*_DIR` overrides, XDG-on-macOS), instead of deriving from the
       recipes-dir parent. The cached cloud token migrates from the pre-2.2 `~/.config/xbloom-ble/`
