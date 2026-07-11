@@ -218,6 +218,9 @@ class RealController(MachineController):
         self.address = addr
         self._client = XBloomClient(addr)
         await self._client.connect()
+        # Open an app-style session (subscribe + a4) so the machine shows "connected"
+        # and the link stays warm — mirrors what the phone app does on connect.
+        await self._client.open_session()
 
     async def stage(self, recipe: Recipe) -> StatusEvent:
         if self._client is None:

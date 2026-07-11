@@ -97,6 +97,13 @@ class XBloomClient:
         self.ack_timeout = ack_timeout
         self._client = None
         self._notif_queue: asyncio.Queue[StatusEvent] = asyncio.Queue()
+        # Held-session state (see open_session): once a session is open we keep the
+        # ffe2 subscription up so the machine shows "connected", but we only *queue*
+        # notifications while an operation is actively consuming them (``_consuming``)
+        # — otherwise the machine's continuous idle stream would grow the queue forever.
+        self._subscribed = False       # ffe2 notify subscription is active
+        self._session_active = False   # hold the subscription across operations
+        self._consuming = False        # an operation wants frames queued right now
 
     # ------------------------------------------------------------------
     # Connection
@@ -126,6 +133,39 @@ class XBloomClient:
             await self._client.disconnect()
             log.info("disconnected")
         self._client = None
+        self._subscribed = False
+        self._session_active = False
+        self._consuming = False
+
+    async def open_session(self, *, settle: float = 0.3) -> None:
+        """Register as an app-style session so the machine shows it's **connected**.
+
+        Mirrors exactly what the phone app does the moment it connects (verified from
+        the HCI capture): subscribe to ffe2 status notifications, then write the
+        ``a4`` session-start frame. The machine responds by streaming status and
+        lighting its paired/connected icon, and the session is **held** — the ffe2
+        subscription stays up across brews (idle frames are dropped, see
+        :meth:`_on_notify`) so the link stays warm and no per-brew re-handshake is
+        needed. The app sends no periodic keepalive, so neither do we.
+
+        This is a session handshake, **not** a brew: ``a4`` only opens a session and
+        never dispenses water (the brew opcodes ``0x42``/``0x46`` live only in
+        :meth:`start`). Safe to call on every connect; idempotent-ish (re-sending
+        ``a4`` is harmless).
+        """
+        if self._client is None or not self._client.is_connected:
+            raise XBloomError("not connected")
+        self._session_active = True
+        await self._ensure_subscribed()
+        log.info("→ a4 (open session — machine shows connected)")
+        await self._client.write_gatt_char(CHAR_COMMAND, build_session_start(), response=False)
+        await asyncio.sleep(settle)
+
+    async def close_session(self) -> None:
+        """Drop the held session (stop holding the ffe2 subscription). The BLE link
+        itself stays up until :meth:`disconnect`."""
+        self._session_active = False
+        await self._stop_notify()
 
     async def __aenter__(self) -> XBloomClient:
         await self.connect()
@@ -143,19 +183,42 @@ class XBloomClient:
         # Full raw chatter at DEBUG (enable with `--debug`) — this is how we capture
         # the brew-record frames we don't parse yet, so they can be decoded later.
         log.debug("← %s%s", raw.hex(), f"  [{event.state_name}]" if event is not None else "")
-        if event is not None:
+        if event is None:
+            return
+        # Only queue while an operation is consuming. During an idle held session the
+        # machine streams status continuously (heartbeats, scale, idle-state frames) —
+        # dropping those here keeps the queue bounded instead of growing unbounded.
+        if self._consuming:
             self._notif_queue.put_nowait(event)
 
-    async def _start_notify(self) -> None:
+    async def _ensure_subscribed(self) -> None:
+        """Subscribe to ffe2 status notifications (idempotent)."""
         assert self._client is not None
+        if self._subscribed:
+            return
         await self._client.start_notify(CHAR_STATUS, self._on_notify)
+        self._subscribed = True
+
+    async def _start_notify(self) -> None:
+        # Ensure we're listening, start with a clean queue (drop any idle-session
+        # backlog), and mark that this operation wants frames.
+        await self._ensure_subscribed()
+        while not self._notif_queue.empty():
+            self._notif_queue.get_nowait()
+        self._consuming = True
 
     async def _stop_notify(self) -> None:
-        if self._client is not None and self._client.is_connected:
+        # Operation finished consuming. Keep the subscription up if a session is held
+        # (so the machine stays "connected"); otherwise tear it down.
+        self._consuming = False
+        if self._session_active:
+            return
+        if self._subscribed and self._client is not None and self._client.is_connected:
             try:
                 await self._client.stop_notify(CHAR_STATUS)
             except Exception:  # pragma: no cover - best-effort cleanup
                 pass
+        self._subscribed = False
 
     async def _drain_until_state(self, state: int, timeout: float) -> StatusEvent:
         """Wait for a status event whose state byte equals ``state``."""
