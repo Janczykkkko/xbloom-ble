@@ -464,19 +464,21 @@ class XBloomApp(App):
             "Brew": brew,
             "Tab": self._view,
         })
+        # <o> toggles the held connection — label it by the current link state.
+        conn_key = ("o", "disconnect" if self.controller.is_connected else "connect")
         keys = {
             "recipes": [
                 ("enter", "brew ▶"), ("e", "edit"), ("n", "new"), ("C", "clone"),
                 ("1/2/3", "→ slot"),
                 ("p", "push slots"), ("/", "filter"), ("i", "import"), ("d", "delete"),
-                ("tab", "next tab"), ("h", "help"), ("q", "quit"),
+                conn_key, ("tab", "next tab"), ("h", "help"), ("q", "quit"),
             ],
             "brewing": [
-                ("c", "cancel"), ("esc", "recipes"), ("tab", "next tab"),
+                ("c", "cancel"), conn_key, ("esc", "recipes"), ("tab", "next tab"),
                 ("l", "log"), ("h", "help"), ("q", "quit"),
             ],
             "history": [
-                ("j/k", "select"), ("esc", "recipes"), ("tab", "next tab"),
+                ("j/k", "select"), conn_key, ("esc", "recipes"), ("tab", "next tab"),
                 ("l", "log"), ("h", "help"), ("q", "quit"),
             ],
         }.get(self._view, [])

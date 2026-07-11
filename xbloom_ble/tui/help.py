@@ -43,6 +43,15 @@ _SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
                       "to History; you can leave the tab (Tab/Esc) and the brew keeps running"),
         ("c", "cancel a brew in progress"),
     ]),
+    ("Machine connection", [
+        ("(on launch)", "the TUI connects and HOLDS the Bluetooth link open for the whole "
+                        "session, so brews skip the per-brew connect + handshake and start fast"),
+        ("o", "connect / disconnect the machine. Disconnect to hand it back to the phone "
+              "app (only one Bluetooth link at a time); it reconnects on the next brew if needed"),
+        ("(header)", "shows the live link: ● connected · ○ disconnected · ◌ connecting…"),
+        ("--no-auto-connect", "launch without auto-connecting (or set auto_connect: false in the "
+                              "config / during `xbloom init`)"),
+    ]),
     ("History tab", [
         ("(select a brew)", "shows that brew's saved telemetry curve on the right"),
     ]),
