@@ -9,7 +9,7 @@ device itself. The package never emits the ``0x42`` (commit) or ``0x46`` (start)
 opcodes, so it can never auto-start a brew. See ``protocol.py``.
 """
 
-__version__ = "2.2.1"
+__version__ = "2.3.0"
 
 from .protocol import PATTERN_CODES, build_load_frames, crc16_kermit, xbloom_frame
 from .recipe import Pour, Recipe, RecipeError

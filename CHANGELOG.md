@@ -8,6 +8,15 @@ Conventional-Commit history — new versions are inserted below.
 
 <!-- version list -->
 
+## v2.3.0 (2026-07-11)
+
+### Features
+
+- Hold the BLE connection open for the TUI session
+  ([#19](https://github.com/Janczykkkko/xbloom-ble/pull/19),
+  [`0b63565`](https://github.com/Janczykkkko/xbloom-ble/commit/0b635652516b773d6283d889ca92cc6229d20ebf))
+
+
 ## v2.2.1 (2026-07-08)
 
 ### Bug Fixes
