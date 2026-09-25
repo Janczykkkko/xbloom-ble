@@ -119,10 +119,14 @@ EP_RECIPE_PUBLIC = "RecipeDetail.html"
 # Cup types accepted by the cloud (per the task spec / app enum).
 CUP_TYPES = {"xpod": 1, "xdripper": 2, "other": 3, "tea": 4}
 
-# Pour-pattern codes on the cloud side. Verified against real app-made recipes:
-# spiral/ring/circular pours all encode as 2, center as 1. (An earlier port used
-# spiral=3, which did not match what the app actually stores.)
-PATTERN_CODES = {"center": 1, "circular": 2, "ring": 2, "spiral": 2}
+# Pour-pattern codes on the cloud side. Verified against real app-made recipes
+# and by pushing each code and reading it back in the app (xBloom Coffee app,
+# Studio account, 2026-09-25): center = 1, spiral = 2, ring/circular = 3.
+# (An earlier port used spiral=3, which did not match; a later fix collapsed
+# ring onto 2, which made every ring pour show up as spiral in the app.)
+PATTERN_CODES = {"center": 1, "spiral": 2, "ring": 3, "circular": 3}
+# Reverse map for cloud -> recipe (both ring spellings decode to ``ring``).
+CLOUD_PATTERN_NAMES = {1: "center", 2: "spiral", 3: "ring"}
 
 # The cloud encodes booleans as 1 = ON/true, 2 = OFF/false (never true/false).
 CLOUD_TRUE = 1
@@ -202,9 +206,10 @@ def encrypt_form(form: dict[str, Any]) -> str:
 def _pour_to_cloud(pour: Pour, index: int) -> dict[str, Any]:
     """Map one :class:`~xbloom_ble.recipe.Pour` to the cloud pour schema.
 
-    * ``pattern`` → 1/2 (center/circular; this package's spiral & ring → 2).
+    * ``pattern`` → 1/2/3 (center/spiral/ring — ``circular`` is an alias of ring).
     * ``agitation`` → ``isEnableVibrationAfter`` (agitate *after* the pour, e.g.
-      the recipe's "agitation after bloom"). 1 = on, 2 = off.
+      the recipe's "agitation after bloom"); ``agitation_before`` →
+      ``isEnableVibrationBefore`` (the app's "vibration before" toggle). 1 = on, 2 = off.
     * booleans are encoded 1 = on, 2 = off (never true/false).
     """
     pattern_code = PATTERN_CODES.get(pour.pattern)
@@ -220,7 +225,7 @@ def _pour_to_cloud(pour: Pour, index: int) -> dict[str, Any]:
         "flowRate": float(pour.flow_ml_s),
         "pattern": pattern_code,
         "pausing": int(pour.pause_s),
-        "isEnableVibrationBefore": _cloud_bool(False),
+        "isEnableVibrationBefore": _cloud_bool(bool(pour.agitation_before)),
         "isEnableVibrationAfter": _cloud_bool(bool(pour.agitation)),
     }
 
@@ -312,9 +317,10 @@ def parse_share_id(share_url_or_id: str) -> str:
 def recipe_from_cloud(payload: dict[str, Any]) -> Recipe:
     """Convert a cloud recipe (from :meth:`XBloomCloud.fetch_public`) into a Recipe.
 
-    The reverse of :func:`recipe_to_cloud` (lossy where the cloud is: pattern code 2
-    round-trips to ``spiral``). The ratio is derived from the pours, not the cloud
-    ``grandWater``, so the result always validates.
+    The reverse of :func:`recipe_to_cloud`: pattern codes 1/2/3 decode to
+    ``center``/``spiral``/``ring`` (an unknown code falls back to ``spiral``). The
+    ratio is derived from the pours, not the cloud ``grandWater``, so the result
+    always validates.
     """
     from .recipe import Recipe
     rv = payload.get("recipeVo", payload)
@@ -323,7 +329,7 @@ def recipe_from_cloud(payload: dict[str, Any]) -> Recipe:
     rpm = min(120, max(60, int(rv.get("rpm") or 100)))
     pours = []
     for p in pours_src:
-        pattern = "center" if int(p.get("pattern", 2)) == 1 else "spiral"
+        pattern = CLOUD_PATTERN_NAMES.get(int(p.get("pattern", 2)), "spiral")
         pours.append({
             "ml": int(round(float(p.get("volume", 0)))),
             "temp_c": int(round(float(p.get("temperature", 92)))),
@@ -332,6 +338,7 @@ def recipe_from_cloud(payload: dict[str, Any]) -> Recipe:
             "rpm": 0 if pattern == "center" else rpm,
             "flow_ml_s": float(p.get("flowRate", 3.0)),
             "agitation": int(p.get("isEnableVibrationAfter", CLOUD_FALSE)) == CLOUD_TRUE,
+            "agitation_before": int(p.get("isEnableVibrationBefore", CLOUD_FALSE)) == CLOUD_TRUE,
         })
     no_grind = rv.get("isSetGrinderSize") == CLOUD_FALSE or rv.get("grinderSize") in (None, 0)
     return Recipe.from_dict({

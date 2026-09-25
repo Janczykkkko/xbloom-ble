@@ -43,9 +43,10 @@ def test_is_managed():
     assert not _is_managed(None)
 
 
-def test_spiral_maps_to_pattern_2():
-    # Verified against real app-made recipes: spiral/ring pours encode as cloud
-    # pattern code 2 (an earlier port wrongly used 3).
+def test_pattern_codes_center_spiral_ring():
+    # Verified by reading back app-made recipes AND by pushing each code and
+    # checking the app's pattern selector: center=1, spiral=2, ring/circular=3.
+    # (Collapsing ring onto 2 made every ring pour show up as spiral in the app.)
     import json as _json
 
     from xbloom_ble.cloud import recipe_to_cloud
@@ -54,11 +55,32 @@ def test_spiral_maps_to_pattern_2():
     rec = Recipe.from_dict({
         "name": "T", "dose_g": 16, "grind": 60,
         "pours": [{"ml": 40, "temp_c": 92, "pattern": "spiral", "rpm": 120},
-                  {"ml": 100, "temp_c": 92, "pattern": "ring", "rpm": 120}],
+                  {"ml": 100, "temp_c": 92, "pattern": "ring", "rpm": 120},
+                  {"ml": 60, "temp_c": 92, "pattern": "center", "rpm": 0}],
     })
     cloud = recipe_to_cloud(rec, cup_type="xdripper")
     patterns = [p["pattern"] for p in _json.loads(cloud["pourDataJSONStr"])]
-    assert patterns == [2, 2]
+    assert patterns == [2, 3, 1]
+
+
+def test_recipe_from_cloud_decodes_all_three_patterns():
+    # Cloud -> recipe must round-trip ring (3) instead of flattening it to spiral.
+    from xbloom_ble.cloud import recipe_from_cloud
+
+    payload = {
+        "theName": "T", "dose": 16.0, "grinderSize": 60.0, "rpm": 120, "isSetGrinderSize": 1,
+        "pourList": [
+            {"volume": 40.0, "temperature": 92.0, "pattern": 2, "pausing": 20, "flowRate": 3.5,
+             "isEnableVibrationBefore": 2, "isEnableVibrationAfter": 1},
+            {"volume": 100.0, "temperature": 92.0, "pattern": 3, "pausing": 10, "flowRate": 3.5,
+             "isEnableVibrationBefore": 2, "isEnableVibrationAfter": 2},
+            {"volume": 60.0, "temperature": 92.0, "pattern": 1, "pausing": 1, "flowRate": 3.0,
+             "isEnableVibrationBefore": 2, "isEnableVibrationAfter": 2},
+        ],
+    }
+    rec = recipe_from_cloud(payload)
+    assert [p.pattern for p in rec.pours] == ["spiral", "ring", "center"]
+    assert [p.agitation for p in rec.pours] == [True, False, False]
 
 
 def test_no_grind_sets_grinder_off_in_cloud():
@@ -95,6 +117,35 @@ def test_agitation_maps_to_vibration_after():
     bloom = _json.loads(recipe_to_cloud(rec, cup_type="xdripper")["pourDataJSONStr"])[0]
     assert bloom["isEnableVibrationAfter"] == 1   # on
     assert bloom["isEnableVibrationBefore"] == 2  # off
+
+
+def test_agitation_before_maps_to_vibration_before():
+    # The app's "vibration before" toggle (level the bed before the bloom) is a
+    # separate cloud field. Both directions must carry it.
+    import json as _json
+
+    from xbloom_ble.cloud import recipe_from_cloud, recipe_to_cloud
+    from xbloom_ble.recipe import Recipe
+
+    rec = Recipe.from_dict({
+        "name": "T", "dose_g": 16, "grind": 60,
+        "pours": [{"ml": 40, "temp_c": 92, "pattern": "spiral", "agitation_before": True, "rpm": 120},
+                  {"ml": 100, "temp_c": 92, "pattern": "spiral", "agitation": True, "rpm": 120}],
+    })
+    pours = _json.loads(recipe_to_cloud(rec, cup_type="xdripper")["pourDataJSONStr"])
+    assert (pours[0]["isEnableVibrationBefore"], pours[0]["isEnableVibrationAfter"]) == (1, 2)
+    assert (pours[1]["isEnableVibrationBefore"], pours[1]["isEnableVibrationAfter"]) == (2, 1)
+
+    back = recipe_from_cloud({
+        "theName": "T", "dose": 16.0, "grinderSize": 60.0, "rpm": 120, "isSetGrinderSize": 1,
+        "pourList": [
+            {"volume": 40.0, "temperature": 92.0, "pattern": 2, "pausing": 20, "flowRate": 3.5,
+             "isEnableVibrationBefore": 1, "isEnableVibrationAfter": 2},
+            {"volume": 100.0, "temperature": 92.0, "pattern": 2, "pausing": 5, "flowRate": 3.5,
+             "isEnableVibrationBefore": 2, "isEnableVibrationAfter": 1},
+        ],
+    })
+    assert [(p.agitation_before, p.agitation) for p in back.pours] == [(True, False), (False, True)]
 
 
 def test_sync_new_recipe_adds_with_prefix(client):

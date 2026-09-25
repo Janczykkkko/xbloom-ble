@@ -282,3 +282,19 @@ def test_plain_recipe_omits_absent_metadata():
 def test_negative_water_ml_raises():
     with pytest.raises(RecipeError):
         Recipe.from_dict(_with(water_ml=-5))
+
+
+def test_agitation_before_round_trips_and_defaults_off():
+    from xbloom_ble.recipe import Recipe
+
+    rec = Recipe.from_dict({
+        "name": "T", "dose_g": 16, "grind": 60,
+        "pours": [{"ml": 40, "temp_c": 92, "pattern": "spiral", "agitation_before": True, "rpm": 120},
+                  {"ml": 100, "temp_c": 92, "pattern": "spiral", "rpm": 120}],
+    })
+    rec.validate()  # raises on any problem
+    assert [p.agitation_before for p in rec.pours] == [True, False]
+    d = rec.to_dict()
+    assert d["pours"][0]["agitation_before"] is True
+    assert "agitation_before" not in d["pours"][1]  # omitted when off (keeps YAML clean)
+    assert Recipe.from_dict(d).pours[0].agitation_before is True

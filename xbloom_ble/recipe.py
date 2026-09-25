@@ -61,6 +61,12 @@ class Pour:
     #: Optional human label for this pour (e.g. "Bloom", "Pour 1"). Informational
     #: only — never sent to the machine.
     label: str | None = None
+    #: Agitate (dock-arm vibration) *before* this pour — the app's "전 진동" /
+    #: "vibration before" toggle, typically used to level the bed before the bloom.
+    #: **Cloud-only for now:** it is synced to the app account (``isEnableVibrationBefore``)
+    #: but the BLE pours frame has no decoded byte for it yet, so ``xbloom brew``
+    #: ignores it. Default ``False``.
+    agitation_before: bool = False
 
     def to_protocol_dict(self) -> dict[str, Any]:
         """Shape expected by :func:`xbloom_ble.protocol.build_41`."""
@@ -88,6 +94,8 @@ class Pour:
             flow_ml_s=float(self.flow_ml_s),
             agitation=bool(self.agitation),
         )
+        if self.agitation_before:
+            d["agitation_before"] = True
         return d
 
 
@@ -153,6 +161,7 @@ class Recipe:
                         rpm=rp.get("rpm", 0),
                         flow_ml_s=rp.get("flow_ml_s", 3.0),
                         label=rp.get("label"),
+                        agitation_before=bool(rp.get("agitation_before", False)),
                     )
                 )
             except KeyError as exc:

@@ -389,6 +389,7 @@ Per-pour fields (ranges are **firm — per xBloom Studio specs**):
 | `temp_c`    | Water temperature (40–95 °C, 1 °C steps).                       |
 | `pattern`   | `spiral`, `ring`, or `center`.                                 |
 | `agitation` | `true` only with `spiral` (an agitated bloom). Default `false`. |
+| `agitation_before` | Vibrate the dock arm *before* this pour (the app's "vibration before" toggle, e.g. to level the bed before the bloom). Default `false`. **Cloud-only for now** — synced to the app account, but ignored by `xbloom brew` (the BLE byte for it is not decoded yet). |
 | `pause_s`   | Pause after this pour, seconds (0–255; the on-machine countdown caps near 99 s). |
 | `rpm`       | Agitation rotation speed (60–120, 10-RPM steps; `0` for `center`). |
 | `flow_ml_s` | Flow rate in ml/s (3.0–3.5, 0.1 steps).                         |
@@ -446,7 +447,7 @@ track real hardware.**
 | `flow_ml_s`   | 3.0–3.5 ml/s   | **Firm (per xBloom Studio specs).** Settable in 0.1 steps. |
 | `pause_s`     | 0–255          | The wire byte is `256 − seconds` (so 0–255 fits), but the **on-machine countdown caps near 99 s** — treat 0–99 as the practical range. |
 | `ml` (pour)   | 1–4000 ml      | Lower bound (≥1) is firm; a pour **over 127 ml is auto-split** by the protocol (not an error). The 4000 ceiling is just a sanity guard. |
-| `pattern`     | `spiral`, `ring`, `center` | **Firm.** These are the decoded pattern codes; `agitation: true` is only valid with `spiral`. |
+| `pattern`     | `spiral`, `ring`, `center` | **Firm.** These are the decoded pattern codes; `agitation: true` is only valid with `spiral`. On the cloud side they are `center=1`, `spiral=2`, `ring=3` (verified against app-made recipes and by reading back pushed ones). |
 
 > **Source:** xBloom Studio published specifications.
 
