@@ -82,12 +82,17 @@ jobs:
           badge: true
           hide_complexity: true
           thresholds: "65 85"       # < 65 red · 65–85 orange · > 85 green
+      - name: Coverage summary → job summary
+        run: cat code-coverage-results.md >> "$GITHUB_STEP_SUMMARY"
+      # A PR from a fork gets a read-only token, so the comment fails with "Resource not
+      # accessible by integration" — and a failed step skips the floor check below. Forks
+      # read the table in the job summary instead.
       - name: Sticky coverage comment
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           header: coverage
           recreate: true
           path: code-coverage-results.md
-      - name: Enforce coverage floor (65%)
+      - name: Enforce coverage floor (80%)
         run: coverage report --fail-under=80
