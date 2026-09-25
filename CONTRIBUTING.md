@@ -91,9 +91,10 @@ XBLOOM_REFERENCE=/path/to/parse_btsnoop.py pytest -q
 
 ### Coverage
 
-CI runs a coverage job and posts a summary on every PR; the gate lives in
-`pyproject.toml` (`[tool.coverage.*]`) and fails the build below the floor. Run it
-locally the same way:
+CI runs a coverage job and shows a summary on every PR (as a comment on PRs from this
+repo, in the job summary on PRs from forks). The floor is **80%**: the job's last step
+runs `coverage report --fail-under=80` and fails the build below it (what counts is set
+in `pyproject.toml`, `[tool.coverage.*]`). Run it locally the same way:
 
 ```bash
 pytest --cov=xbloom_ble --cov-report=term-missing
