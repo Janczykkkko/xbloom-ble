@@ -1049,3 +1049,176 @@ def test_connect_toggle_refused_mid_brew(store):
         assert app.controller.is_connected
         assert "mid-brew" in app._last_message
     drive(store, s)
+
+
+# ── BLE omission notices in the TUI ─────────────────────────────────────────
+RING_AFTER_RECIPE_YAML = """
+name: Ring After
+dose_g: 16
+grind: 55
+ratio: 15
+pours:
+  - {label: Bloom, ml: 40, temp_c: 92, pattern: ring, agitation: true, agitation_before: true, pause_s: 30, rpm: 100, flow_ml_s: 3.0}
+  - {ml: 200, temp_c: 92, pattern: spiral, pause_s: 5, rpm: 100, flow_ml_s: 3.0}
+"""
+
+
+def test_confirm_gate_lists_ble_omissions_and_shows_only_sent_agitation():
+    from xbloom_ble.recipe import Recipe
+
+    warn = Recipe.from_yaml_text(RING_AFTER_RECIPE_YAML)
+    detail = str(ConfirmBrewScreen(warn)._detail())
+    assert "Not sent over BLE" in detail
+    assert "pour #1:" in detail and "vibration before" in detail
+    assert "agit" not in detail.split("Not sent over BLE")[0]   # ring+after is NOT shown as sent
+
+    plain = Recipe.from_yaml_text(FILTER_RECIPE)
+    plain_detail = str(ConfirmBrewScreen(plain)._detail())
+    assert "Not sent over BLE" not in plain_detail
+
+
+def test_journey_confirm_gate_shows_omissions_for_load_only_and_start(tmp_path):
+    (tmp_path / "ring.yaml").write_text(RING_AFTER_RECIPE_YAML)
+    store = RecipeStore(tmp_path)
+
+    async def s(app, pilot):
+        await pilot.press("b")
+        for _ in range(40):
+            await pilot.pause(0.02)
+            if isinstance(app.screen, ConfirmBrewScreen):
+                break
+        detail = str(app.screen.query_one("#cb-detail").render())
+        await pilot.press("escape")
+        return detail
+    detail = drive(store, s)
+    # The notice sits on the gate that precedes BOTH "Load only" and "Start".
+    assert "Not sent over BLE" in detail and "pour #1:" in detail
+
+
+def test_journey_slots_push_logs_omissions_before_writing(store, tmp_path):
+    from xbloom_ble.recipe import Recipe
+
+    ctrl = FakeController(speed=0.002, auto_start=0.03)
+    warn = Recipe.from_yaml_text(RING_AFTER_RECIPE_YAML)
+    plain = Recipe.from_yaml_text(FILTER_RECIPE)
+
+    async def s(app, pilot):
+        logs: list[str] = []
+        app._log = lambda msg, style="white": logs.append(msg)   # capture the log panel
+        await app._push_slots([plain, warn, plain])
+        return logs, ctrl.saved_slots
+    logs, saved = drive(store, s, controller=ctrl)
+    assert saved is not None and len(saved) == 3
+    warn_idx = next(i for i, m in enumerate(logs) if "slot B" in m and "pour #1:" in m)
+    push_idx = next(i for i, m in enumerate(logs) if "pushing slots" in m)
+    assert warn_idx < push_idx                                  # shown BEFORE the write
+    assert not any("slot A" in m or "slot C" in m for m in logs if "pour #" in m)
+
+
+# ── editor: per-row pass-through of fields the form does not show ───────────
+THREE_POUR_RECIPE = """
+name: Three
+dose_g: 15
+grind: 50
+kind: custom
+pours:
+  - {label: Bloom, ml: 60, temp_c: 93, pattern: spiral, agitation_before: true, pause_s: 30, rpm: 120, flow_ml_s: 3.5}
+  - {label: Middle, ml: 90, temp_c: 93, pattern: spiral, agitation: true, pause_s: 10, rpm: 120, flow_ml_s: 3.5}
+  - {label: Last, ml: 90, temp_c: 92, pattern: center, pause_s: 1, rpm: 0, flow_ml_s: 3.0}
+"""
+# The editor always carries a ratio field (pre-filled from Σpours/dose = 16), and
+# validation enforces Σpours == dose × ratio — so every scenario that changes the
+# water total also sets the ratio to keep the recipe saveable.
+
+
+def _editor_scenario(action):
+    """Open the editor on THREE_POUR_RECIPE, apply ``action(ed, pilot)``, save, and
+    return (saved recipe dict, original recipe dict before, original dict after)."""
+    def run_it(tmp_path):
+        (tmp_path / "three.yaml").write_text(THREE_POUR_RECIPE)
+        store = RecipeStore(tmp_path)
+
+        async def s(app, pilot):
+            ed = await open_editor(app, pilot, "e")
+            await pilot.pause(0.1)
+            ev = ed.query_one(EditorView)
+            orig_before = ev._orig.to_dict()
+            await action(ed, pilot)
+            await pilot.pause(0.1)
+            ed.query_one("#save", ClickCell).on_click()
+            await pilot.pause(0.15)
+            saved = store.load(tmp_path / "three.yaml").to_dict()
+            return saved, orig_before, ev._orig.to_dict()
+        return drive(store, s)
+    return run_it
+
+
+def _pour_extras(d):
+    return [(p.get("label"), p.get("agitation_before", False), p["agitation"]) for p in d["pours"]]
+
+
+def test_journey_editor_unchanged_save_keeps_label_and_before(tmp_path):
+    async def nothing(ed, pilot):
+        pass
+    saved, before, after = _editor_scenario(nothing)(tmp_path)
+    assert _pour_extras(saved) == [("Bloom", True, False), ("Middle", False, True), ("Last", False, False)]
+    assert before == after
+
+
+def test_journey_editor_visible_edit_keeps_label_and_before(tmp_path):
+    async def edit(ed, pilot):
+        ed.query(PourRow).first().query_one("#ml", Input).value = "75"   # 60 → 75: Σ = 255
+        ed.query_one("#ratio", Input).value = "17"                        # 15 × 17 = 255
+    saved, before, after = _editor_scenario(edit)(tmp_path)
+    assert saved["pours"][0]["ml"] == 75
+    assert _pour_extras(saved) == [("Bloom", True, False), ("Middle", False, True), ("Last", False, False)]
+    assert before == after
+
+
+def test_journey_editor_delete_first_row_keeps_remaining_extras(tmp_path):
+    async def delete_first(ed, pilot):
+        ed.query(PourRow).first().query_one("#remove", ClickCell).on_click()   # Σ = 180
+        ed.query_one("#ratio", Input).value = "12"                             # 15 × 12
+    saved, before, after = _editor_scenario(delete_first)(tmp_path)
+    assert _pour_extras(saved) == [("Middle", False, True), ("Last", False, False)]
+    assert before == after and len(after["pours"]) == 3
+
+
+def test_journey_editor_delete_middle_row_keeps_labels_on_their_rows(tmp_path):
+    # Was the index-based re-injection bug: deleting B used to hang B's label on C.
+    async def delete_middle(ed, pilot):
+        list(ed.query(PourRow))[1].query_one("#remove", ClickCell).on_click()   # Σ = 150
+        ed.query_one("#ratio", Input).value = "10"                               # 15 × 10
+    saved, before, after = _editor_scenario(delete_middle)(tmp_path)
+    assert _pour_extras(saved) == [("Bloom", True, False), ("Last", False, False)]
+    assert before == after
+
+
+def test_journey_editor_delete_then_add_gives_new_row_defaults(tmp_path):
+    async def delete_then_add(ed, pilot):
+        ed.query(PourRow).last().query_one("#remove", ClickCell).on_click()   # Σ = 150
+        await pilot.pause(0.1)
+        ed.query_one("#add", ClickCell).on_click()                            # + 60 → 210
+        ed.query_one("#ratio", Input).value = "14"                            # 15 × 14
+    saved, before, after = _editor_scenario(delete_then_add)(tmp_path)
+    assert _pour_extras(saved) == [("Bloom", True, False), ("Middle", False, True), (None, False, False)]
+    assert before == after
+
+
+def test_journey_clone_keeps_label_and_before(tmp_path):
+    (tmp_path / "three.yaml").write_text(THREE_POUR_RECIPE)
+    store = RecipeStore(tmp_path)
+
+    async def s(app, pilot):
+        await pilot.pause(0.05)
+        await pilot.press("C")
+        for _ in range(30):
+            await pilot.pause(0.03)
+            if isinstance(app.screen, EditorScreen):
+                break
+        await pilot.pause(0.1)
+        ev = app.screen.query_one(EditorView)
+        return ev._build().to_dict()
+    cloned = drive(store, s)
+    assert cloned["name"].endswith("(copy)")
+    assert _pour_extras(cloned) == [("Bloom", True, False), ("Middle", False, True), ("Last", False, False)]

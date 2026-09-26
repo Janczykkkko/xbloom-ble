@@ -271,3 +271,23 @@ def test_build_parser_brew_flags():
     parser = cli.build_parser()
     args = parser.parse_args(["brew", "r.yaml", "--start", "--address", "AA:BB:CC:DD:EE:FF"])
     assert args.command == "brew" and args.start is True
+
+
+def test_validate_reports_ble_omissions(tmp_path, capsys):
+    f = tmp_path / "ring-after.yaml"
+    f.write_text(
+        "name: RA\ndose_g: 16\ngrind: 55\nratio: 15\npours:\n"
+        "  - {ml: 40, temp_c: 92, pattern: ring, agitation: true, agitation_before: true,"
+        " pause_s: 30, rpm: 100, flow_ml_s: 3.0}\n"
+        "  - {ml: 200, temp_c: 92, pattern: spiral, pause_s: 5, rpm: 100, flow_ml_s: 3.0}\n"
+    )
+    assert cli.main(["validate", str(f)]) == 0
+    out = capsys.readouterr().out
+    assert "OK:" in out
+    assert "Valid, but a BLE load will omit" in out
+    assert "pour #1:" in out and "vibration before" in out
+
+
+def test_validate_stays_quiet_without_omissions(recipe_file, capsys):
+    assert cli.main(["validate", recipe_file]) == 0
+    assert "BLE load will omit" not in capsys.readouterr().out

@@ -198,3 +198,40 @@ def test_prune_removes_stale_managed(client):
     deleted = client.prune_managed([])
     assert deleted == [f"{MANAGED_PREFIX}Geisha"]
     assert "Savora" not in deleted
+
+
+def test_app_ring_pour_with_vibration_after_still_validates():
+    # Verbatim from the PR #20 review: an app recipe with a ring bloom + "vibration
+    # after" must import AND validate. Extended: ring is kept (not flattened to
+    # spiral), both toggles survive, and a YAML reload + cloud re-export carry
+    # pattern=3 and both vibration flags = 1.
+    import json as _json
+
+    import yaml
+
+    from xbloom_ble.cloud import recipe_from_cloud, recipe_to_cloud
+    from xbloom_ble.recipe import Recipe
+
+    rec = recipe_from_cloud({
+        "theName": "T", "dose": 16.0, "grinderSize": 60.0, "rpm": 120, "isSetGrinderSize": 1,
+        "pourList": [
+            {"volume": 40.0, "temperature": 92.0, "pattern": 3, "pausing": 20, "flowRate": 3.5,
+             "isEnableVibrationBefore": 1, "isEnableVibrationAfter": 1},
+            {"volume": 100.0, "temperature": 92.0, "pattern": 2, "pausing": 5, "flowRate": 3.5,
+             "isEnableVibrationBefore": 2, "isEnableVibrationAfter": 2},
+        ],
+    })
+    rec.validate()
+    assert rec.pours[0].pattern == "ring"
+    assert rec.pours[0].agitation is True and rec.pours[0].agitation_before is True
+
+    reloaded = Recipe.from_yaml_text(yaml.safe_dump(rec.to_dict(), allow_unicode=True))
+    reloaded.validate()
+    assert reloaded.pours[0].pattern == "ring"
+    assert reloaded.pours[0].agitation is True and reloaded.pours[0].agitation_before is True
+
+    pours = _json.loads(recipe_to_cloud(reloaded, cup_type="xdripper")["pourDataJSONStr"])
+    assert pours[0]["pattern"] == 3
+    assert (pours[0]["isEnableVibrationBefore"], pours[0]["isEnableVibrationAfter"]) == (1, 1)
+    assert pours[1]["pattern"] == 2
+    assert (pours[1]["isEnableVibrationBefore"], pours[1]["isEnableVibrationAfter"]) == (2, 2)

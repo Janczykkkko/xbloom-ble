@@ -93,11 +93,17 @@ class ConfirmBrewScreen(ModalScreen[str]):
             extras = []
             if p.pause_s:
                 extras.append(f"{p.pause_s}s")
-            if p.agitation:
+            sent = p.to_protocol_dict()
+            if sent["agitation"]:
                 extras.append("agit")
             if extras:
                 t.append(f"  {' '.join(extras)}", style="yellow")
             t.append("\n")
+        warnings = r.ble_warnings()
+        if warnings:
+            t.append("\nNot sent over BLE (kept in the recipe/cloud):\n", style="bold yellow")
+            for w in warnings:
+                t.append(f" ⚠ {w}\n", style="yellow")
         return t
 
     def on_mount(self) -> None:

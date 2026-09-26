@@ -123,6 +123,11 @@ class PourRow(Horizontal):
         super().__init__(classes="pour-row")
         p = pour or {}
         self._idx = idx
+        # The row owns a copy of its source pour dict. value() overlays only the
+        # fields this row can edit, so properties the editor does not show
+        # (label, agitation_before, …) ride along with THIS row — they are never
+        # re-attached by index, so deleting/adding rows cannot misplace them.
+        self._src = dict(p)
         self._init = {
             "ml": str(p.get("ml", 40)),
             "temp_c": str(p.get("temp_c", 92)),
@@ -150,7 +155,8 @@ class PourRow(Horizontal):
                 return cast(self.query_one(f"#{wid}", Input).value)
             except Exception:
                 return default
-        return {
+        out = dict(self._src)
+        out.update({
             "ml": num("ml", int, 0),
             "temp_c": num("temp_c", int, 92),
             "pattern": self._patt(),
@@ -158,7 +164,8 @@ class PourRow(Horizontal):
             "rpm": num("rpm", int, 100),
             "flow_ml_s": num("flow_ml_s", float, 3.0),
             "agitation": self._agit(),
-        }
+        })
+        return out
 
     def _patt(self) -> str:
         try:
@@ -285,10 +292,9 @@ class EditorView(VerticalScroll):
         pours = self.query_one("#pours", Vertical)
         pours.remove_children()
         if recipe:
-            src = [{
-                "ml": p.ml, "temp_c": p.temp_c, "pattern": p.pattern, "pause_s": p.pause_s,
-                "rpm": p.rpm, "flow_ml_s": p.flow_ml_s, "agitation": p.agitation,
-            } for p in recipe.pours]
+            # Row-level pass-through: each row keeps its whole pour dict (label,
+            # agitation_before, …), not just the fields the form shows.
+            src = [p.to_dict() for p in recipe.pours]
         else:  # blank defaults for a new recipe
             src = [{"ml": 40, "pause_s": 30}, {"ml": 200, "pause_s": 5}]
         for i, p in enumerate(src, 1):
@@ -312,16 +318,14 @@ class EditorView(VerticalScroll):
             "pours": [row.value() for row in self.query(PourRow)],
         }
         # The form edits only the core brew params — preserve the original recipe's
-        # optional metadata (dripper/kind/water_ml/…) and per-pour labels so an edit
-        # never silently drops them.
+        # optional metadata (dripper/kind/water_ml/…) so an edit never silently
+        # drops it. Per-pour extras (label, agitation_before) travel with their
+        # PourRow (see PourRow.value), not by index.
         if self._orig is not None:
             for key in ("kind", "dripper", "water_ml", "hot_water_ml", "ice_g", "time", "note"):
                 val = getattr(self._orig, key, None)
                 if val is not None:
                     data[key] = val
-            for i, pour in enumerate(data["pours"]):
-                if i < len(self._orig.pours) and self._orig.pours[i].label:
-                    pour["label"] = self._orig.pours[i].label
         return data
 
     def _build(self):

@@ -51,14 +51,78 @@ def test_bad_pattern_raises():
         Recipe.from_dict(bad)
 
 
-def test_agitation_only_with_spiral_raises():
+def test_agitation_with_center_raises_but_ring_is_accepted():
+    # The model accepts the combinations the app stores: spiral+after and
+    # ring+after. center+after is still rejected (never observed, no BLE byte).
     bad = _with(pours=[
         {"ml": 35, "temp_c": 90, "pattern": "center", "agitation": True,
          "pause_s": 40, "rpm": 100, "flow_ml_s": 3.0},
         {"ml": 115, "temp_c": 90, "pattern": "spiral", "pause_s": 5, "rpm": 100, "flow_ml_s": 3.0},
     ])
-    with pytest.raises(RecipeError):
+    with pytest.raises(RecipeError, match="pattern/agitation"):
         Recipe.from_dict(bad)
+    ok = _with(pours=[
+        {"ml": 35, "temp_c": 90, "pattern": "ring", "agitation": True,
+         "pause_s": 40, "rpm": 100, "flow_ml_s": 3.0},
+        {"ml": 115, "temp_c": 90, "pattern": "spiral", "pause_s": 5, "rpm": 100, "flow_ml_s": 3.0},
+    ])
+    rec = Recipe.from_dict(ok)
+    assert rec.pours[0].pattern == "ring" and rec.pours[0].agitation is True
+
+
+def _ring_after_recipe():
+    return Recipe.from_dict(_with(pours=[
+        {"ml": 35, "temp_c": 90, "pattern": "ring", "agitation": True, "agitation_before": True,
+         "pause_s": 40, "rpm": 100, "flow_ml_s": 3.0},
+        {"ml": 115, "temp_c": 90, "pattern": "spiral", "pause_s": 5, "rpm": 100, "flow_ml_s": 3.0},
+    ]))
+
+
+def test_ring_after_is_projected_only_at_the_ble_boundary():
+    """ring+after (and vibration-before) stay in the model/YAML; only the BLE
+    frame drops them, and the bytes equal the plain ring/no-after encoding."""
+    from xbloom_ble.protocol import build_load_frames
+
+    rec = _ring_after_recipe()
+    snapshot = rec.to_dict()
+    # BLE view: ring is sent, after-agitation is projected off, no new byte combo.
+    proto = rec.to_protocol_dict()
+    assert proto["pours"][0]["pattern"] == "ring"
+    assert proto["pours"][0]["agitation"] is False
+    plain = Recipe.from_dict(_with(pours=[
+        {"ml": 35, "temp_c": 90, "pattern": "ring", "pause_s": 40, "rpm": 100, "flow_ml_s": 3.0},
+        {"ml": 115, "temp_c": 90, "pattern": "spiral", "pause_s": 5, "rpm": 100, "flow_ml_s": 3.0},
+    ]))
+    assert [f.hex() for f in build_load_frames(rec.to_protocol_dict())] == \
+           [f.hex() for f in build_load_frames(plain.to_protocol_dict())]
+    # The source model is untouched by building the frames.
+    assert rec.pours[0].agitation is True and rec.pours[0].agitation_before is True
+    assert rec.to_dict() == snapshot
+    assert snapshot["pours"][0]["agitation"] is True
+    assert snapshot["pours"][0]["agitation_before"] is True
+    # And the loss is reported, per pour, by the pure query.
+    warnings = rec.ble_warnings()
+    assert len(warnings) == 1 and warnings[0].startswith("pour #1:")
+    assert "vibration before" in warnings[0]
+    assert "vibration after on a ring pour" in warnings[0]
+    assert "ring pattern is sent" in warnings[0]
+
+
+def test_spiral_after_bytes_unchanged_and_plain_recipe_has_no_warnings():
+    from xbloom_ble.protocol import PATTERN_CODES, build_load_frames
+
+    rec = Recipe.from_dict(_with(pours=[
+        {"ml": 35, "temp_c": 90, "pattern": "spiral", "agitation": True,
+         "pause_s": 40, "rpm": 100, "flow_ml_s": 3.0},
+        {"ml": 115, "temp_c": 90, "pattern": "spiral", "pause_s": 5, "rpm": 100, "flow_ml_s": 3.0},
+    ]))
+    assert rec.ble_warnings() == []                       # fully expressible → silent
+    assert rec.pours[0].agitation_before is False         # default stays off
+    proto = rec.to_protocol_dict()
+    assert proto["pours"][0]["agitation"] is True         # spiral+after is NOT projected
+    frame = build_load_frames(proto)[-1]                  # the pours frame
+    pat, agit = PATTERN_CODES[("spiral", True)]
+    assert bytes([pat, agit]) in frame                    # the existing byte pair is emitted
 
 
 def test_ml_out_of_range_raises():

@@ -682,6 +682,10 @@ class XBloomApp(App):
         self.run_worker(self._push_slots(recipes), name="push")
 
     async def _push_slots(self, recipes) -> None:
+        # Show what each slot's BLE write will leave out BEFORE the first write.
+        for letter, r in zip(SLOTS, recipes, strict=False):
+            for w in r.ble_warnings():
+                self._log(f"⚠ slot {letter} ({r.name}): {w}", "yellow")
         self._log("pushing slots A/B/C → machine…", "cyan")
         try:
             await self._ensure_connected()      # reuse the held link (connect if needed)

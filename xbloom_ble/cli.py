@@ -99,6 +99,11 @@ def _cmd_validate(args) -> int:
     grind_str = "no-grind (pre-ground)" if recipe.no_grind else f"grind {recipe.grind}"
     print(f"OK: '{recipe.name}' — {recipe.dose_g} g, {grind_str}, "
           f"{len(recipe.pours)} pours, {recipe.total_water_ml} ml total water")
+    warnings = recipe.ble_warnings()
+    if warnings:
+        print("Valid, but a BLE load will omit:")
+        for w in warnings:
+            print(f"  ⚠️  {w}")
     return 0
 
 

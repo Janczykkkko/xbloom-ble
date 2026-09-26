@@ -331,3 +331,52 @@ def test_disconnect_resets_session():
     run(c.open_session())
     run(c.disconnect())
     assert not c._session_active and not c._subscribed and not c._consuming
+
+
+# ── BLE omission notice (before the first write) ───────────────────────────
+RING_AFTER_RECIPE = Recipe.from_dict({
+    "name": "RA", "dose_g": 16, "grind": 55, "ratio": 15,
+    "pours": [{"ml": 40, "temp_c": 92, "pattern": "ring", "agitation": True,
+               "agitation_before": True, "pause_s": 30, "rpm": 100, "flow_ml_s": 3.0},
+              {"ml": 200, "temp_c": 92, "pattern": "spiral", "pause_s": 5,
+               "rpm": 100, "flow_ml_s": 3.0}],
+})
+
+
+def test_load_recipe_warns_once_about_ble_omissions(caplog):
+    import logging
+
+    fake = FakeBleak()
+    c = _client(fake)
+    with caplog.at_level(logging.WARNING, logger="xbloom_ble"):
+        ev = run(c.load_recipe(RING_AFTER_RECIPE, settle=0.01))
+    assert ev.state_name == "armed"
+    msgs = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(msgs) == 1 and msgs[0].startswith("pour #1:")
+    assert "vibration before" in msgs[0] and "ring pour" in msgs[0]
+    # Still a plain load-only sequence: same opcodes, no brew opcodes.
+    cmds = _cmds(fake)
+    assert cmds[:2] == [0xA4, 0x56] and cmds[-1] == 0x41
+    assert not ({0x42, 0x46, 0x47} & set(cmds))
+
+
+def test_load_recipe_is_silent_for_a_fully_expressible_recipe(caplog):
+    import logging
+
+    fake = FakeBleak()
+    c = _client(fake)
+    with caplog.at_level(logging.WARNING, logger="xbloom_ble"):
+        run(c.load_recipe(RECIPE, settle=0.01))
+    assert not [r for r in caplog.records if r.levelno == logging.WARNING]
+
+
+def test_save_slots_warns_per_slot_about_ble_omissions(caplog):
+    import logging
+
+    fake = FakeBleak()
+    c = _client(fake)
+    with caplog.at_level(logging.WARNING, logger="xbloom_ble"):
+        run(c.save_slots([RECIPE, RING_AFTER_RECIPE, RECIPE]))
+    msgs = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(msgs) == 1 and msgs[0].startswith("slot B: pour #1:")
+    assert _cmds(fake).count(0xF6) == 3

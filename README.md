@@ -388,8 +388,8 @@ Per-pour fields (ranges are **firm — per xBloom Studio specs**):
 | `ml`        | Water volume for this pour (≥1 ml). A pour over 127 ml is auto-split by the protocol — not an error. |
 | `temp_c`    | Water temperature (40–95 °C, 1 °C steps).                       |
 | `pattern`   | `spiral`, `ring`, or `center`.                                 |
-| `agitation` | `true` only with `spiral` (an agitated bloom). Default `false`. |
-| `agitation_before` | Vibrate the dock arm *before* this pour (the app's "vibration before" toggle, e.g. to level the bed before the bloom). Default `false`. **Cloud-only for now** — synced to the app account, but ignored by `xbloom brew` (the BLE byte for it is not decoded yet). |
+| `agitation` | Vibrate *after* this pour (an agitated bloom). Accepted with `spiral` and `ring` — the combinations the app stores. Over BLE only `spiral`+after is encoded today; a `ring`+after pour is sent as a plain ring pour and reported as omitted (see below). Default `false`. |
+| `agitation_before` | Vibrate the dock arm *before* this pour (the app's "vibration before" toggle, e.g. to level the bed before the bloom). Default `false`. Kept in the recipe and synced to the app account; the current BLE encoding has no byte for it, so a BLE load omits it and says so. |
 | `pause_s`   | Pause after this pour, seconds (0–255; the on-machine countdown caps near 99 s). |
 | `rpm`       | Agitation rotation speed (60–120, 10-RPM steps; `0` for `center`). |
 | `flow_ml_s` | Flow rate in ml/s (3.0–3.5, 0.1 steps).                         |
@@ -427,6 +427,17 @@ Validation rejects: fewer than two pours (you need at least a bloom and a first
 pour), an unknown `pattern`/`agitation` combo, out-of-range values, and — if a
 `ratio` is given — a pour total that doesn't equal `dose_g * ratio`.
 
+A recipe that validates is a valid **model** of an app recipe; it does not
+promise that every property is reproduced over BLE. The current BLE encoding
+cannot carry `agitation_before`, nor "vibration after" on a `ring` pour. Those
+stay in the YAML and on the cloud, are dropped only when the BLE frames are
+built, and are announced before the first BLE write: `xbloom validate` prints
+them under "Valid, but a BLE load will omit", `xbloom brew` / `save-slots` log
+them, and the TUI shows them on the brew-confirm screen and before a slot push
+(`Recipe.ble_warnings()` is the single source). Note the reverse-compatibility
+limit: a YAML saved with `ring` + `agitation: true` will not validate on
+releases before this one.
+
 ---
 
 ## Recipe limits & valid ranges
@@ -447,7 +458,7 @@ track real hardware.**
 | `flow_ml_s`   | 3.0–3.5 ml/s   | **Firm (per xBloom Studio specs).** Settable in 0.1 steps. |
 | `pause_s`     | 0–255          | The wire byte is `256 − seconds` (so 0–255 fits), but the **on-machine countdown caps near 99 s** — treat 0–99 as the practical range. |
 | `ml` (pour)   | 1–4000 ml      | Lower bound (≥1) is firm; a pour **over 127 ml is auto-split** by the protocol (not an error). The 4000 ceiling is just a sanity guard. |
-| `pattern`     | `spiral`, `ring`, `center` | **Firm.** These are the decoded pattern codes; `agitation: true` is only valid with `spiral`. On the cloud side they are `center=1`, `spiral=2`, `ring=3` (verified against app-made recipes and by reading back pushed ones). |
+| `pattern`     | `spiral`, `ring`, `center` | **Firm.** These are the decoded pattern codes. `agitation: true` is accepted with `spiral` or `ring` (app-verified); only `spiral`+after has a BLE byte combination, so `ring`+after is projected to a plain ring pour at the BLE boundary (and reported). On the cloud side the patterns are `center=1`, `spiral=2`, `ring=3` (verified against app-made recipes and by reading back pushed ones). |
 
 > **Source:** xBloom Studio published specifications.
 
