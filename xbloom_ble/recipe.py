@@ -23,11 +23,17 @@ YAML schema
       - {label: Bloom,  ml: 35,  temp_c: 90, pattern: spiral, pause_s: 40, rpm: 100, flow_ml_s: 3.0}
       - {label: Pour 1, ml: 115, temp_c: 90, pattern: spiral, pause_s: 5,  rpm: 100, flow_ml_s: 3.0}
 
-Patterns: ``spiral``, ``ring``, ``center``. Set ``agitation: true`` (only valid
-with ``spiral``) for an agitated bloom. The metadata fields (``dripper``, ``kind``,
-``water_ml``, ``hot_water_ml``, ``ice_g``, ``time``, ``note``, and per-pour
-``label``) are optional context that round-trips through YAML but never reaches
-the machine.
+Patterns: ``spiral``, ``ring``, ``center``. ``agitation: true`` (vibrate *after*
+the pour, e.g. an agitated bloom) is accepted on ``spiral`` and ``ring`` pours —
+the combinations the xBloom app itself stores. ``agitation_before: true`` is the
+app's "vibration before" toggle. A recipe that validates is a valid *model* of
+an app recipe; it does not promise that every property is reproduced over BLE:
+the current BLE encoding carries ``spiral``+after only, so ``ring``+after and
+every ``agitation_before`` are **kept in the model and on the cloud but omitted
+from the BLE frames** (see :meth:`Recipe.ble_warnings`). The metadata fields
+(``dripper``, ``kind``, ``water_ml``, ``hot_water_ml``, ``ice_g``, ``time``,
+``note``, and per-pour ``label``) are optional context that round-trips through
+YAML but never reaches the machine.
 """
 
 from __future__ import annotations
@@ -40,7 +46,13 @@ import yaml
 
 from .protocol import PATTERN_CODES
 
-__all__ = ["Pour", "Recipe", "RecipeError"]
+__all__ = ["Pour", "Recipe", "RecipeError", "MODEL_PATTERN_COMBOS"]
+
+# (pattern, agitation) combinations the *model* accepts. This is the BLE table
+# plus the app-verified ``ring`` + "vibration after" (an app-made ring bloom reads
+# back from the cloud with that toggle on). Anything not in the BLE table is
+# projected at the BLE boundary — see ``Pour.to_protocol_dict`` / ``Pour.ble_omissions``.
+MODEL_PATTERN_COMBOS: frozenset[tuple[str, bool]] = frozenset(PATTERN_CODES) | {("ring", True)}
 
 
 class RecipeError(ValueError):
@@ -61,14 +73,45 @@ class Pour:
     #: Optional human label for this pour (e.g. "Bloom", "Pour 1"). Informational
     #: only — never sent to the machine.
     label: str | None = None
+    #: Agitate (dock-arm vibration) *before* this pour — the app's "전 진동" /
+    #: "vibration before" toggle, typically used to level the bed before the bloom.
+    #: Kept in the model and synced to the app account (``isEnableVibrationBefore``);
+    #: the current BLE encoding has no decoded byte for it, so it is **omitted from
+    #: the BLE frames** (reported by :meth:`ble_omissions`). Default ``False``.
+    agitation_before: bool = False
+
+    def ble_omissions(self) -> list[str]:
+        """What of this pour the *current* BLE encoding cannot carry.
+
+        Empty for a pour that is sent exactly as modelled. Otherwise a list of
+        short phrases (``"vibration before"``, ``"vibration after on a ring pour"``)
+        naming the properties that :meth:`to_protocol_dict` will leave out. This
+        describes what the implementation can express today, not what the machine
+        can do.
+        """
+        out: list[str] = []
+        if self.agitation_before:
+            out.append("vibration before")
+        if self.agitation and (self.pattern, True) not in PATTERN_CODES:
+            out.append(f"vibration after on a {self.pattern} pour")
+        return out
 
     def to_protocol_dict(self) -> dict[str, Any]:
-        """Shape expected by :func:`xbloom_ble.protocol.build_41`."""
+        """Shape expected by :func:`xbloom_ble.protocol.build_41`.
+
+        This is the model → BLE boundary: a combination the BLE table cannot
+        encode is *projected* onto the nearest one it can (``ring`` + after →
+        ``ring`` without agitation; ``agitation_before`` has no byte at all).
+        The projection happens here only — the ``Pour`` itself, ``to_dict()`` and
+        the cloud mapping keep the original toggles. No new byte combinations
+        are invented. See :meth:`ble_omissions` for what was dropped.
+        """
+        agitation = bool(self.agitation) and (self.pattern, True) in PATTERN_CODES
         return {
             "ml": self.ml,
             "temp": self.temp_c,
             "pattern": self.pattern,
-            "agitation": self.agitation,
+            "agitation": agitation,
             "pause": self.pause_s,
             "rpm": self.rpm,
             "flow": self.flow_ml_s,
@@ -88,6 +131,8 @@ class Pour:
             flow_ml_s=float(self.flow_ml_s),
             agitation=bool(self.agitation),
         )
+        if self.agitation_before:
+            d["agitation_before"] = True
         return d
 
 
@@ -153,6 +198,7 @@ class Recipe:
                         rpm=rp.get("rpm", 0),
                         flow_ml_s=rp.get("flow_ml_s", 3.0),
                         label=rp.get("label"),
+                        agitation_before=bool(rp.get("agitation_before", False)),
                     )
                 )
             except KeyError as exc:
@@ -254,11 +300,11 @@ class Recipe:
 
         total_ml = 0
         for i, p in enumerate(self.pours, start=1):
-            if (p.pattern, bool(p.agitation)) not in PATTERN_CODES:
-                valid = sorted({pat for pat, _ in PATTERN_CODES})
+            if (p.pattern, bool(p.agitation)) not in MODEL_PATTERN_COMBOS:
+                valid = sorted({pat for pat, _ in MODEL_PATTERN_COMBOS})
                 errors.append(
                     f"pour #{i}: pattern/agitation ({p.pattern!r}, {p.agitation}) "
-                    f"not in known set {valid} (agitation only valid with 'spiral')"
+                    f"not in known set {valid} (agitation is valid with 'spiral' or 'ring')"
                 )
             # A pour over 127 ml is auto-split by the protocol — that is fine,
             # not an error. ml just needs to be ≥1 and fit a sane upper bound.
@@ -309,6 +355,26 @@ class Recipe:
 
         if errors:
             raise RecipeError("; ".join(errors))
+
+    def ble_warnings(self) -> list[str]:
+        """Per-pour notice of what the BLE load will *omit* from this recipe.
+
+        Pure: no I/O, no logging. Empty when every pour is sent exactly as
+        modelled. Each entry names the pour (1-based) and the omitted
+        properties, e.g. ``"pour #1: vibration before omitted from the BLE load
+        (kept in the recipe/cloud); ring pattern is sent"``. Callers that are about
+        to write to the machine (``load_recipe``, ``save_slots``, the CLI, the TUI)
+        surface these once before the first BLE write.
+        """
+        out: list[str] = []
+        for i, p in enumerate(self.pours, start=1):
+            omitted = p.ble_omissions()
+            if omitted:
+                out.append(
+                    f"pour #{i}: {' and '.join(omitted)} omitted from the BLE load "
+                    f"(kept in the recipe/cloud); {p.pattern} pattern is sent"
+                )
+        return out
 
     # ------------------------------------------------------------------
     # Protocol bridge

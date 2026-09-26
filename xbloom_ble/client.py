@@ -265,6 +265,10 @@ class XBloomClient:
             raise XBloomError("not connected")
 
         recipe.validate()
+        # Tell the caller ONCE, before the first BLE write, what this load leaves out
+        # (properties the current encoding cannot carry — see Recipe.ble_warnings).
+        for warning in recipe.ble_warnings():
+            log.warning("%s", warning)
         # frames == [a4, a6, a8, pours]; the pours opcode is chosen by build_load_frames.
         frames = build_load_frames(recipe.to_protocol_dict())
         a4, load_frames = frames[0], frames[1:]
@@ -421,6 +425,8 @@ class XBloomClient:
         frames = []
         for i, recipe in enumerate(ordered):
             recipe.validate()
+            for warning in recipe.ble_warnings():
+                log.warning("slot %s: %s", "ABC"[i], warning)
             frames.append(build_save_slot(recipe.to_protocol_dict(), i, scale=scales[i]))
 
         await self._start_notify()
