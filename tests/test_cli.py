@@ -181,6 +181,26 @@ def test_save_slots_ble_error(monkeypatch, ble, recipe_file, capsys):
     assert rc == 3 and "RETRY" in capsys.readouterr().out
 
 
+def test_save_slots_busy_machine_exits_4_not_3(monkeypatch, ble, recipe_file, capsys):
+    from xbloom_ble.client import MachineBusy
+
+    class Busy(FakeClient):
+        async def save_slots(self, recipes, **kw):
+            raise MachineBusy("brewing")
+    monkeypatch.setattr("xbloom_ble.client.XBloomClient", Busy)
+    rc = cli.main(["save-slots", recipe_file, recipe_file, recipe_file,
+                   "--address", "AA:BB:CC:DD:EE:FF"])
+    out = capsys.readouterr().out
+    assert rc == 4, f"a busy machine must exit 4 (not the generic 3), got {rc}"
+    assert "BUSY" in out and "slots NOT written" in out
+
+
+def test_save_slots_accepts_the_busy_guard_flag(ble, recipe_file):
+    # callers pass --busy-guard to fail closed against an older client that lacks it
+    assert cli.main(["save-slots", recipe_file, recipe_file, recipe_file,
+                     "--address", "AA:BB:CC:DD:EE:FF", "--busy-guard"]) == 0
+
+
 # ── cloud ───────────────────────────────────────────────────────────
 class FakeCloud:
     def __init__(self, auth_path=None):

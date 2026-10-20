@@ -13,7 +13,7 @@ import asyncio
 
 import pytest
 
-from xbloom_ble.client import CHAR_STATUS, XBloomClient, XBloomError, scan
+from xbloom_ble.client import CHAR_STATUS, MachineBusy, XBloomClient, XBloomError, scan
 from xbloom_ble.recipe import Recipe
 
 # ── real-shape frames (0x57 status = 580207571f10000000c1<state>000000<crc>) ──
@@ -214,10 +214,75 @@ def test_cancel_sends_0x47():
 
 
 # ── save-slots (never brews) ───────────────────────────────────────────────
-def test_save_slots_programs_three_and_never_brews():
+def _status_frame(state: int) -> str:
+    """A 0x57 status frame carrying ``state`` (crc is not checked by the parser)."""
+    return f"580207571f10000000c1{state:02x}000000" + "0000"
+
+
+AUTO_AT_REST = _status_frame(0x41)    # Auto-mode selector parks the machine here
+PROGRESS_39 = "5802073900100000" + "00c10000000000" + "0000"   # live brew-progress frame
+
+
+def _slot_fake(on_status_query: list[str]) -> FakeBleak:
+    """A fake whose answer to the 0x56 status query is ``on_status_query``."""
     fake = FakeBleak()
+    fake.script[0x56] = on_status_query
+    return fake
+
+
+@pytest.mark.parametrize(
+    "frames",
+    [[_status_frame(0x3B)], [_status_frame(0x1F)], [_status_frame(0x1E)],
+     [_status_frame(0x22)], [_status_frame(0x1D)], [PROGRESS_39],
+     [WATER35, _status_frame(0x3B)]],
+    ids=["brewing", "armed", "awaiting_confirm", "starting", "loading", "progress_frame",
+         "scale_then_brewing"],
+)
+def test_save_slots_refuses_while_the_machine_is_busy(frames):
+    fake = _slot_fake(frames)
     c = _client(fake)
-    run(c.save_slots([RECIPE, RECIPE, RECIPE]))
+    with pytest.raises(MachineBusy):
+        run(c.save_slots([RECIPE, RECIPE, RECIPE], busy_window=0.2))
+    cmds = _cmds(fake)
+    assert 0xF7 not in cmds, f"PRO/AUTO mode frame was sent to a busy machine: {cmds}"
+    assert 0xF6 not in cmds, f"a slot frame was sent to a busy machine: {cmds}"
+
+
+@pytest.mark.parametrize(
+    "frames",
+    [[AUTO_AT_REST], [IDLE], [WATER35, COFFEE12, AUTO_AT_REST]],
+    ids=["auto_mode_at_rest", "idle", "scale_stream_then_auto"],
+)
+def test_save_slots_proceeds_when_the_machine_is_at_rest(frames):
+    fake = _slot_fake(frames)
+    c = _client(fake)
+    run(c.save_slots([RECIPE, RECIPE, RECIPE], busy_window=0.2))
+    assert _cmds(fake).count(0xF6) == 3
+
+
+def test_save_slots_will_not_write_when_the_machine_says_nothing():
+    fake = _slot_fake([])
+    c = _client(fake)
+    with pytest.raises(XBloomError, match="no status") as exc:
+        run(c.save_slots([RECIPE, RECIPE, RECIPE], busy_window=0.2))
+    assert not isinstance(exc.value, MachineBusy)
+    assert 0xF6 not in _cmds(fake) and 0xF7 not in _cmds(fake)
+
+
+def test_save_slots_a_brew_seen_after_pro_writes_no_slot_and_restores_auto():
+    fake = _slot_fake([AUTO_AT_REST])
+    fake.script[0xF7] = [_status_frame(0x3B)]      # the PRO switch is answered by a brew state
+    c = _client(fake)
+    with pytest.raises(MachineBusy):
+        run(c.save_slots([RECIPE, RECIPE, RECIPE], busy_window=0.2))
+    assert 0xF6 not in _cmds(fake)
+    assert _cmds(fake).count(0xF7) == 2            # PRO, then back to AUTO
+
+
+def test_save_slots_programs_three_and_never_brews():
+    fake = _slot_fake([AUTO_AT_REST])
+    c = _client(fake)
+    run(c.save_slots([RECIPE, RECIPE, RECIPE], busy_window=0.2))
     cmds = _cmds(fake)
     assert cmds.count(0xF6) == 3                     # three slot writes
     assert not ({0x42, 0x46, 0x47} & set(cmds))      # never a brew opcode

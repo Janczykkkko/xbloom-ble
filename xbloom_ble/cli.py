@@ -204,10 +204,14 @@ SLOTS_RECONNECT_WARNING = (
 )
 
 
+#: ``save-slots`` exit code: the machine is brewing / armed, so nothing was written.
+EXIT_BUSY = 4
+
+
 async def _cmd_save_slots(args) -> int:
     import os
 
-    from .client import XBloomClient, scan
+    from .client import MachineBusy, XBloomClient, scan
 
     # Load all three recipes (A, B, C) — the machine only stores a full set.
     recipes = []
@@ -241,6 +245,11 @@ async def _cmd_save_slots(args) -> int:
     try:
         async with XBloomClient(address) as client:
             await client.save_slots(recipes, scale=scales)
+    except MachineBusy as exc:
+        # Distinct exit code: the machine is brewing, nothing was sent, and an immediate
+        # retry is pointless. Callers must NOT retry blindly on 4.
+        print(f"BUSY: {exc}")
+        return EXIT_BUSY
     except Exception as exc:  # noqa: BLE001 - surface any BLE error cleanly
         print(f"ERROR: {exc}")
         print("(If the machine shows RETRY: make sure the phone/app is disconnected "
@@ -610,6 +619,10 @@ def build_parser() -> argparse.ArgumentParser:
     s_slot.add_argument("--scale-off", metavar="LETTERS",
                         help="comma list of slots whose stored preset disables the scale, "
                         "e.g. 'C' or 'A,C' (default: all on)")
+    s_slot.add_argument("--busy-guard", action="store_true",
+                        help="accepted so a caller can fail closed against an older xbloom "
+                        "without the guard (it rejects the unknown flag). The guard is always "
+                        "on: a brewing machine is refused with exit code 4")
     s_slot.add_argument("--address", help="machine BLE address (or set XBLOOM_ADDRESS)")
     s_slot.add_argument("--scan-timeout", type=float, default=8.0,
                         help="scan seconds when no address given (default 8)")

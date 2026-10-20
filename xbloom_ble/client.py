@@ -58,8 +58,48 @@ STATE_IDLE = 0x01
 STATE_SLOTS_SAVED = 0x25
 
 
+# States that mean the machine is in the middle of (or waiting on) a brew. A slot write
+# switches the machine to PRO mode, which yanks it out of any of these — so
+# :meth:`XBloomClient.save_slots` refuses to start while one is showing.
+BUSY_STATES = frozenset({
+    0x0C, 0x0F,        # refused (no water / no beans) — the machine WAITS on the human
+    0x10, 0x23, 0x3B,  # pouring / brewing
+    0x1D,              # a recipe is being received
+    0x1E, 0x1F,        # awaiting confirm / armed (a human is about to press brew)
+    0x22,              # starting (grinding)
+    0x24,              # coffee ready, cup still on the scale
+    0x43,              # another slot batch is being stored right now
+})
+# Live brew-progress frames (TYPE byte). They are only streamed while a brew runs.
+BUSY_FRAME_TYPES = frozenset({0x39})
+
+
 class XBloomError(RuntimeError):
     """Raised on BLE / protocol errors in the client."""
+
+
+class MachineBusy(XBloomError):
+    """The machine is brewing (or armed for a brew), so a slot write was REFUSED.
+
+    Nothing that changes the machine (PRO mode, slot frames) was sent. Retrying at once is
+    pointless — wait until the machine is idle. ``state_name`` is what it reported.
+    """
+
+    def __init__(self, state_name: str):
+        self.state_name = state_name
+        super().__init__(
+            f"the machine is busy ({state_name}) - slots NOT written. "
+            "Wait until it is idle, then try again."
+        )
+
+
+def _busy_name(event: StatusEvent) -> str | None:
+    """Return a short name if ``event`` shows a brew in progress, else ``None``."""
+    if event.state is not None and event.state in BUSY_STATES:
+        return event.state_name
+    if event.state is None and len(event.raw) > 3 and event.raw[3] in BUSY_FRAME_TYPES:
+        return f"brew progress 0x{event.raw[3]:02x}"
+    return None
 
 
 async def scan(timeout: float = 8.0):
@@ -390,6 +430,7 @@ class XBloomClient:
         scale: bool | Sequence[bool] = True,
         ensure_pro: bool = True,
         end_in_auto: bool = True,
+        busy_window: float = 3.0,
     ) -> None:
         """Program the machine's three Easy-Mode preset slots (A, B, C) in one batch.
 
@@ -408,6 +449,14 @@ class XBloomClient:
         shows **RETRY**, so this always writes the full trio; there is no commit
         frame.
 
+        🛑 **Refuses while the machine is busy.** Before it changes anything it opens a
+        session (``a4``) and asks for status (``0x56``) — neither alters the machine — and
+        listens for ``busy_window`` seconds. If it sees a brew state (:data:`BUSY_STATES`) or
+        live brew-progress frames it raises :class:`MachineBusy` and sends NOTHING else
+        (no PRO mode, no slot frame): switching to PRO mid-brew kicks the machine out of the
+        brew. Auto-mode at rest (``0x41``) is *not* busy. If the machine says nothing at all
+        in the window, it raises a plain :class:`XBloomError` (state unknown → do not write).
+
         ⚠️ These presets live **on the machine**. Opening the xBloom app and
         reassigning a slot will push the app's own choices over BLE and overwrite
         what you set here — so program the slots when you intend to drive the
@@ -425,20 +474,34 @@ class XBloomClient:
 
         await self._start_notify()
         try:
-            # 1. Open a session (a4), then force PRO mode. Slot writes are ONLY accepted in
-            #    PRO mode: AUTO mode (the on-machine A/B/C selector) parks the machine in
-            #    status 0x41 and rejects writes (RETRY); PRO mode drops it to 0x01 (idle),
-            #    where saves land. Sending PRO is what makes the idle wait below reliable.
+            # 0. LOOK before touching: open a session (a4) + ask for status (0x56), neither of
+            #    which changes the machine, and refuse if a brew is in flight.
             await self._client.write_gatt_char(
                 CHAR_COMMAND, build_session_start(), response=False
             )
+            await self._client.write_gatt_char(
+                CHAR_COMMAND, build_status_query(), response=False
+            )
+            await self._refuse_if_busy(busy_window)
+
+            # 1. Force PRO mode. Slot writes are ONLY accepted in
+            #    PRO mode: AUTO mode (the on-machine A/B/C selector) parks the machine in
+            #    status 0x41 and rejects writes (RETRY); PRO mode drops it to 0x01 (idle),
+            #    where saves land. Sending PRO is what makes the idle wait below reliable.
             if ensure_pro:
                 log.info("→ set PRO mode (slot writes require it)")
                 await self._client.write_gatt_char(
                     CHAR_COMMAND, build_set_mode(pro=True), response=False
                 )
             try:
-                await self._drain_until_state(STATE_IDLE, self.ack_timeout)
+                await self._wait_idle_unless_busy(self.ack_timeout)
+            except MachineBusy:
+                # A brew appeared AFTER the first look. Write no slot; put the mode back.
+                if ensure_pro and end_in_auto:
+                    await self._client.write_gatt_char(
+                        CHAR_COMMAND, build_set_mode(pro=False), response=False
+                    )
+                raise
             except XBloomError:
                 log.warning("machine idle not confirmed; proceeding (is it in AUTO mode?)")
             await asyncio.sleep(1.0)
@@ -465,6 +528,49 @@ class XBloomClient:
                 await asyncio.sleep(0.3)
         finally:
             await self._stop_notify()
+
+    async def _refuse_if_busy(self, window: float) -> None:
+        """Listen ``window`` s for status; raise :class:`MachineBusy` on a brew state, or
+        :class:`XBloomError` if the machine said nothing (state unknown)."""
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + window
+        frames = 0
+        while True:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                break
+            try:
+                event = await asyncio.wait_for(self._notif_queue.get(), timeout=remaining)
+            except asyncio.TimeoutError:
+                break
+            frames += 1
+            busy = _busy_name(event)
+            if busy is not None:
+                log.warning("machine busy (%s) — refusing to write slots", busy)
+                raise MachineBusy(busy)
+        if frames == 0:
+            raise XBloomError(
+                "the machine reported no status, so its state is unknown - slots NOT written"
+            )
+
+    async def _wait_idle_unless_busy(self, timeout: float) -> None:
+        """Wait for idle (0x01); raise :class:`MachineBusy` if a brew state shows up
+        meanwhile, :class:`XBloomError` on timeout."""
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + timeout
+        while True:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise XBloomError(f"timed out waiting for idle after {timeout:.0f}s")
+            try:
+                event = await asyncio.wait_for(self._notif_queue.get(), timeout=remaining)
+            except asyncio.TimeoutError:
+                raise XBloomError(f"timed out waiting for idle after {timeout:.0f}s") from None
+            busy = _busy_name(event)
+            if busy is not None:
+                raise MachineBusy(busy)
+            if event.state == STATE_IDLE:
+                return
 
     @staticmethod
     def _normalize_slots(

@@ -285,8 +285,16 @@ single slot leaves the machine showing **RETRY**.
 >
 > 🔌 Before writing, **disconnect the phone** (close the app *and* turn its
 > Bluetooth off) — the machine allows one BLE link at a time. The machine can be
-> on **any screen**: `save-slots` switches it into Pro mode to write and back to
+> on **any idle screen**: `save-slots` switches it into Pro mode to write and back to
 > Auto after (see the protocol section), so you don't need to set the mode yourself.
+>
+> 🛑 **Never mid-brew.** Switching to Pro mode pulls the machine out of a brew. So
+> `save-slots` first listens to the machine's status (it sends only the session
+> start and a status query) and **refuses** if it sees a brew state (loading, armed,
+> awaiting confirm, starting, brewing, ready) or live brew-progress frames. It then
+> exits with code **4** (`MachineBusy` in the library) having written nothing; wait
+> until the machine is idle and run it again. Auto-mode at rest is not busy. If the
+> machine reports nothing at all, its state is unknown and nothing is written (exit 3).
 
 ### Push recipes to your app account (cloud)
 
