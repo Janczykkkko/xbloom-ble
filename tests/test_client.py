@@ -233,10 +233,10 @@ def _slot_fake(on_status_query: list[str]) -> FakeBleak:
 @pytest.mark.parametrize(
     "frames",
     [[_status_frame(0x3B)], [_status_frame(0x1F)], [_status_frame(0x1E)],
-     [_status_frame(0x22)], [_status_frame(0x1D)], [PROGRESS_39],
-     [WATER35, _status_frame(0x3B)]],
-    ids=["brewing", "armed", "awaiting_confirm", "starting", "loading", "progress_frame",
-         "scale_then_brewing"],
+     [_status_frame(0x22)], [PROGRESS_39],
+     [WATER35, _status_frame(0x3B)], [_status_frame(0x1D), _status_frame(0x1F)]],
+    ids=["brewing", "armed", "awaiting_confirm", "starting", "progress_frame",
+         "scale_then_brewing", "loading_then_armed"],
 )
 def test_save_slots_refuses_while_the_machine_is_busy(frames):
     fake = _slot_fake(frames)
@@ -250,8 +250,10 @@ def test_save_slots_refuses_while_the_machine_is_busy(frames):
 
 @pytest.mark.parametrize(
     "frames",
-    [[AUTO_AT_REST], [IDLE], [WATER35, COFFEE12, AUTO_AT_REST]],
-    ids=["auto_mode_at_rest", "idle", "scale_stream_then_auto"],
+    [[AUTO_AT_REST], [IDLE], [WATER35, COFFEE12, AUTO_AT_REST],
+     [_status_frame(0x1D), IDLE], [_status_frame(0x1D)]],
+    ids=["auto_mode_at_rest", "idle", "scale_stream_then_auto",
+         "transient_loading_at_connect_then_idle", "transient_loading_at_connect_alone"],
 )
 def test_save_slots_proceeds_when_the_machine_is_at_rest(frames):
     fake = _slot_fake(frames)

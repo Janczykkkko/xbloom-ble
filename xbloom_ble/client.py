@@ -64,7 +64,11 @@ STATE_SLOTS_SAVED = 0x25
 BUSY_STATES = frozenset({
     0x0C, 0x0F,        # refused (no water / no beans) — the machine WAITS on the human
     0x10, 0x23, 0x3B,  # pouring / brewing
-    0x1D,              # a recipe is being received
+    # NOT 0x1D ("loading"): the machine reports it transiently right after a connection opens
+    # (a4 → 0x1d → 0x01, measured when the slot protocol was decoded), so it showed up on an idle
+    # machine and refused every slot write. A recipe can only be received over the single BLE
+    # link — the one we hold — so a 0x1D seen here is our own connection settling; a real load
+    # ends in 0x1F (armed), which is refused below.
     0x1E, 0x1F,        # awaiting confirm / armed (a human is about to press brew)
     0x22,              # starting (grinding)
     0x24,              # coffee ready, cup still on the scale
