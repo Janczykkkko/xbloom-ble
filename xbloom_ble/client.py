@@ -483,9 +483,13 @@ class XBloomClient:
         try:
             # 0. LOOK before touching: open a session (a4) + ask for status (0x56), neither of
             #    which changes the machine, and refuse if a brew is in flight.
+            #    Paced exactly as load_recipe (the path that works on hardware): a4, 0.5 s, then
+            #    0x56. Sent back-to-back, the machine answered nothing at all (2026-11-01: a
+            #    10 s connection with zero ffe2 frames, while a load an hour earlier armed fine).
             await self._client.write_gatt_char(
                 CHAR_COMMAND, build_session_start(), response=False
             )
+            await asyncio.sleep(0.5)
             await self._client.write_gatt_char(
                 CHAR_COMMAND, build_status_query(), response=False
             )
