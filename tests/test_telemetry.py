@@ -9,7 +9,22 @@ so the decoder is pinned to real hardware output.
 
 import struct
 
-from xbloom_ble.telemetry import parse_notification
+from xbloom_ble.telemetry import parse_notification, split_frames
+
+
+def test_split_frames_separates_a_status_glued_behind_a_scale_frame():
+    glued = bytes.fromhex("5802074b9e10000000c100000000fd32" "580207571f10000000c12500000092ce")
+    frames = split_frames(glued)
+    assert [f.hex() for f in frames] == ["5802074b9e10000000c100000000fd32",
+                                         "580207571f10000000c12500000092ce"]
+    assert parse_notification(frames[1]).state == 0x25
+
+
+def test_split_frames_leaves_a_single_or_unreadable_notification_whole():
+    one = bytes.fromhex("580207561f0c000000c17a18")
+    assert split_frames(one) == [one]
+    bad = bytes.fromhex("580207571fff000000c1250000")      # a length that does not fit
+    assert split_frames(bad) == [bad]
 
 
 def _notif(ftype: int, state: int | None = None, sub: int = 0x1F) -> bytes:

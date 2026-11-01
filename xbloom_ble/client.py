@@ -32,7 +32,7 @@ from .protocol import (
     build_status_query,
 )
 from .recipe import Recipe
-from .telemetry import StatusEvent, parse_notification
+from .telemetry import StatusEvent, parse_notification, split_frames
 
 log = logging.getLogger("xbloom_ble")
 
@@ -222,7 +222,12 @@ class XBloomClient:
     # Notifications
     # ------------------------------------------------------------------
     def _on_notify(self, _sender, data: bytearray) -> None:
-        raw = bytes(data)
+        # One notification can carry two frames (a scale frame with a status frame glued
+        # behind it); reading only the first lost the 0x25 slots-saved state on 2026-11-01.
+        for raw in split_frames(bytes(data)):
+            self._on_frame(raw)
+
+    def _on_frame(self, raw: bytes) -> None:
         event = parse_notification(raw)
         # Full raw chatter at DEBUG (enable with `--debug`) — this is how we capture
         # the brew-record frames we don't parse yet, so they can be decoded later.

@@ -303,6 +303,33 @@ def test_save_slots_still_refuses_a_late_brew_state():
     assert 0xF6 not in _cmds(fake) and 0xF7 not in _cmds(fake)
 
 
+#: Captured 2026-11-01 13:11:03 (scrubbed: no address): ONE notification carrying a water-scale
+#: frame with the 0x25 slots-saved status glued behind it.
+GLUED_SCALE_THEN_SAVED = "5802074b9e10000000c100000000fd32" "580207571f10000000c12500000092ce"
+
+
+class _GluedSavedFake(FakeBleak):
+    """The machine acknowledges the stored trio inside a glued notification, as measured."""
+
+    async def write_gatt_char(self, char, data, response=False):
+        data = bytes(data)
+        self.writes.append(data)
+        for hx in self.script.get(data[3], []):
+            self._push(hx)
+        if data[3] == 0xF6:
+            self._slot_writes += 1
+            if self._slot_writes >= 3:
+                self._push(GLUED_SCALE_THEN_SAVED)
+
+
+def test_save_slots_hears_slots_saved_glued_behind_a_scale_frame():
+    fake = _GluedSavedFake()
+    fake.script[0x56] = [AUTO_AT_REST]
+    c = _client(fake)
+    run(c.save_slots([RECIPE, RECIPE, RECIPE], busy_window=0.2, settle=0.0))
+    assert _cmds(fake).count(0xF6) == 3
+
+
 def test_save_slots_a_brew_seen_after_pro_writes_no_slot_and_restores_auto():
     fake = _slot_fake([AUTO_AT_REST])
     fake.script[0xF7] = [_status_frame(0x3B)]      # the PRO switch is answered by a brew state

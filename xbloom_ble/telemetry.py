@@ -167,6 +167,32 @@ def _decode_scale_grams(data: bytes, *, scale: float) -> float | None:
     return round(grams, 2)
 
 
+def split_frames(data: bytes) -> list[bytes]:
+    """Split one ``ffe2`` notification into the frames it carries.
+
+    The machine sometimes packs two frames into one notification — measured: a scale frame
+    with the ``0x25`` slots-saved status glued behind it
+    (``5802074b9e10…fd32`` + ``580207571f10…92ce``). Each frame starts ``58 02 07`` and
+    carries its own total length as a u32le at bytes 5..8. A notification whose length
+    field does not fit is returned whole, as before.
+    """
+    data = bytes(data)
+    frames: list[bytes] = []
+    i = 0
+    while i < len(data):
+        rest = data[i:]
+        if len(rest) < 9 or rest[0] != 0x58:
+            frames.append(rest)
+            break
+        n = int.from_bytes(rest[5:9], "little")
+        if n < 10 or n > len(rest):
+            frames.append(rest)
+            break
+        frames.append(rest[:n])
+        i += n
+    return frames or [data]
+
+
 def parse_notification(data: bytes) -> StatusEvent | None:
     """Decode a raw ``ffe2`` notification into a :class:`StatusEvent`.
 
