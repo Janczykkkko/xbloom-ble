@@ -434,7 +434,8 @@ class XBloomClient:
         scale: bool | Sequence[bool] = True,
         ensure_pro: bool = True,
         end_in_auto: bool = True,
-        busy_window: float = 3.0,
+        busy_window: float = 6.0,
+        settle: float = 2.0,
     ) -> None:
         """Program the machine's three Easy-Mode preset slots (A, B, C) in one batch.
 
@@ -454,8 +455,10 @@ class XBloomClient:
         frame.
 
         🛑 **Refuses while the machine is busy.** Before it changes anything it opens a
-        session (``a4``) and asks for status (``0x56``) — neither alters the machine — and
-        listens for ``busy_window`` seconds. If it sees a brew state (:data:`BUSY_STATES`) or
+        session (``a4``) and asks for status (``0x56``) — neither alters the machine — lets it
+        ``settle`` (as :meth:`load_recipe` does) and listens for ``busy_window`` seconds. A
+        machine woken from standby answers the handshake late: with no settle and a 3 s window
+        the look heard nothing and refused every write on an idle machine. If it sees a brew state (:data:`BUSY_STATES`) or
         live brew-progress frames it raises :class:`MachineBusy` and sends NOTHING else
         (no PRO mode, no slot frame): switching to PRO mid-brew kicks the machine out of the
         brew. Auto-mode at rest (``0x41``) is *not* busy. If the machine says nothing at all
@@ -486,6 +489,9 @@ class XBloomClient:
             await self._client.write_gatt_char(
                 CHAR_COMMAND, build_status_query(), response=False
             )
+            # Frames that arrive during the settle are kept (the queue is consuming), so the
+            # look below still sees them.
+            await asyncio.sleep(settle)
             await self._refuse_if_busy(busy_window)
 
             # 1. Force PRO mode. Slot writes are ONLY accepted in

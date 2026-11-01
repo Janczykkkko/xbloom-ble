@@ -252,7 +252,7 @@ async def _cmd_save_slots(args) -> int:
         return EXIT_BUSY
     except Exception as exc:  # noqa: BLE001 - surface any BLE error cleanly
         print(f"ERROR: {exc}")
-        print("(If the machine shows RETRY: make sure the phone/app is disconnected "
+        print("(If the machine shows RETRY: make sure nothing else holds its Bluetooth "
               "so the machine has a single BLE link, then try again.)")
         return 3
     print("✓ Presets stored to slots A/B/C. The machine did not brew.")

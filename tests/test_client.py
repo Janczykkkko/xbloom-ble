@@ -271,6 +271,38 @@ def test_save_slots_will_not_write_when_the_machine_says_nothing():
     assert 0xF6 not in _cmds(fake) and 0xF7 not in _cmds(fake)
 
 
+class _LateStatusFake(FakeBleak):
+    """A machine that answers the 0x56 status query only after ``delay`` seconds — what a machine
+    woken from standby does. The load path always settled 2 s after the handshake; the slot path
+    listened 3 s with no settle, heard nothing, and refused every write on an idle machine."""
+
+    def __init__(self, delay: float, frames: list[str]):
+        super().__init__()
+        self.delay, self.late = delay, frames
+
+    async def write_gatt_char(self, char, data, response=False):
+        await super().write_gatt_char(char, data, response)
+        if bytes(data)[3] == 0x56:
+            loop = asyncio.get_running_loop()
+            for hx in self.late:
+                loop.call_later(self.delay, self._push, hx)
+
+
+def test_save_slots_hears_a_machine_that_answers_the_handshake_late():
+    fake = _LateStatusFake(0.5, [AUTO_AT_REST])
+    c = _client(fake)
+    run(c.save_slots([RECIPE, RECIPE, RECIPE], busy_window=0.3, settle=0.6))
+    assert _cmds(fake).count(0xF6) == 3, f"a late answer was not heard: {_cmds(fake)}"
+
+
+def test_save_slots_still_refuses_a_late_brew_state():
+    fake = _LateStatusFake(0.5, [_status_frame(0x3B)])
+    c = _client(fake)
+    with pytest.raises(MachineBusy):
+        run(c.save_slots([RECIPE, RECIPE, RECIPE], busy_window=0.3, settle=0.6))
+    assert 0xF6 not in _cmds(fake) and 0xF7 not in _cmds(fake)
+
+
 def test_save_slots_a_brew_seen_after_pro_writes_no_slot_and_restores_auto():
     fake = _slot_fake([AUTO_AT_REST])
     fake.script[0xF7] = [_status_frame(0x3B)]      # the PRO switch is answered by a brew state
